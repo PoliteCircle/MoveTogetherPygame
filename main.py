@@ -192,7 +192,7 @@ def run_menu(start_dir: Optional[Path] = None) -> Optional[dict]:
     - Esc：退出程序
     """
     pygame.init()
-    pygame.display.set_caption("土人方格游戏 - 关卡浏览")
+    pygame.display.set_caption("一起移动！游戏 - 关卡浏览")
     screen = pygame.display.set_mode((MENU_WIDTH, MENU_HEIGHT))
     clock = pygame.time.Clock()
 
@@ -341,6 +341,8 @@ def run_menu(start_dir: Optional[Path] = None) -> Optional[dict]:
                             if result is not None:
                                 return result
 
+        if menu_changed:
+            continue
         draw_text(screen, "一起移动！游戏", 40, 26, 40, color=(235, 235, 240))
         draw_text(screen, "关卡浏览器 / 图形化选关菜单", 42, 74, 24, color=(170, 185, 210))
 
