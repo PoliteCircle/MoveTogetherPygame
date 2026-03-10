@@ -191,3 +191,10 @@ python mapedit.py
 都单独封装好了。
 
 后面你若要继续加第二版，我可以直接在这份结构上帮你往下扩。
+
+### 十、打包
+
+pip install pyinstaller
+
+
+pyinstaller --onedir --windowed --name MoveTogetherPygame --add-data "levels;levels" main.py

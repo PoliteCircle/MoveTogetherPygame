@@ -18,9 +18,9 @@ pygame 图形化地图编辑器（支持中文输入法 + 关卡名/文件名统
    - 使用 pygame.TEXTINPUT 接收已确认文本
    - 使用 pygame.TEXTEDITING 显示预编辑串
    - 进入输入时启动 start_text_input()，退出时 stop_text_input()
-7. 增加“求30步内最短解”按钮：
+7. 增加“求最短解”按钮：
    - 调用 core.solve_level_bfs()
-   - 若无解或最短解大于30步，则显示“30步内无解”
+   - 若无解则显示无解
 8. 三类资源均通过数组配置，方便后续扩展。
 """
 
@@ -182,8 +182,8 @@ def solve_with_step_limit(level: LevelData, max_steps: int = MAX_SOLUTION_STEPS)
     solution = solve_level_bfs(level)
     if solution is None:
         return None
-    if len(solution) > max_steps:
-        return None
+    # if len(solution) > max_steps:
+    #     return None
     return solution
 
 
@@ -304,7 +304,7 @@ def save_current(editor: EditorState) -> None:
 
 
 def compute_solution(editor: EditorState) -> None:
-    """计算30步内最短解并显示结果。"""
+    """计算最短解并显示结果。"""
     solution = solve_with_step_limit(editor.level, MAX_SOLUTION_STEPS)
     if solution is None:
         editor.solution_text = f"{MAX_SOLUTION_STEPS}步内无解"
