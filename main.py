@@ -40,7 +40,7 @@ from core import (
     BG_COLOR,
     CELL_SIZE,
     MOVE_TO_CHAR,
-    build_position_mapping_for_animation,
+    # build_position_mapping_for_animation,
     draw_level,
     draw_text,
     is_victory,
@@ -168,7 +168,7 @@ def format_solution(solution: Optional[List[str]]) -> str:
     return "".join(MOVE_TO_CHAR[m] for m in solution)
 
 
-def run_menu() -> Optional[dict]:
+def run_menu(start_dir: Optional[Path] = None) -> Optional[dict]:
     """
     运行 pygame 图形化选关菜单（目录浏览器版）。
 
@@ -185,6 +185,8 @@ def run_menu() -> Optional[dict]:
     菜单操作：
     - ↑ / ↓：移动高亮项
     - Enter：确认当前选项
+    - 鼠标单击：仅选中
+    - 鼠标双击：确认当前项
     - Backspace：若当前不是根目录，则返回上一级目录
     - R：刷新当前目录
     - Esc：退出程序
@@ -194,17 +196,81 @@ def run_menu() -> Optional[dict]:
     screen = pygame.display.set_mode((MENU_WIDTH, MENU_HEIGHT))
     clock = pygame.time.Clock()
 
-    # 当前浏览目录，初始为根关卡目录
-    current_dir = LEVEL_DIR
+    current_dir = start_dir if start_dir is not None else LEVEL_DIR
+    if not current_dir.exists():
+        current_dir = LEVEL_DIR
     menu_items = build_menu_items(current_dir)
     selected_index = 0
 
+    last_click_index = -1
+    last_click_ms = 0
+    double_click_threshold = 350  # 毫秒
+
+    def activate_selected() -> Optional[dict]:
+        nonlocal current_dir, menu_items, selected_index, menu_changed
+
+        if not menu_items:
+            return None
+
+        item = menu_items[selected_index]
+        item_type = item["type"]
+        item_path = item["path"]
+
+        if item_type == "edit":
+            return {
+                "action": "edit",
+                "dir": current_dir,
+                "menu_dir": current_dir,
+            }
+
+        elif item_type == "back":
+            current_dir = item_path
+            menu_items = build_menu_items(current_dir)
+            selected_index = 0
+            menu_changed = True
+            return None
+
+        elif item_type == "dir":
+            current_dir = item_path
+            menu_items = build_menu_items(current_dir)
+            selected_index = 0
+            menu_changed = True
+            return None
+
+        elif item_type == "level":
+            return {
+                "action": "play",
+                "path": item_path,
+                "menu_dir": current_dir,
+            }
+
+        return None
+
     while True:
         screen.fill((22, 24, 30))
+        menu_changed = False
 
-        # -----------------------------
-        # 事件处理
-        # -----------------------------
+        # 先计算列表区域参数，鼠标事件和绘制都共用
+        list_left = 40
+        list_top = 190
+        list_width = MENU_WIDTH - 80
+        list_height = 390
+
+        item_height = 38
+        start_y = list_top + 52
+        visible_count = max(1, (list_height - 76) // item_height)
+
+        if menu_items:
+            selected_index = max(0, min(selected_index, len(menu_items) - 1))
+            half = visible_count // 2
+            start_index = max(0, selected_index - half)
+            end_index = min(len(menu_items), start_index + visible_count)
+            start_index = max(0, end_index - visible_count)
+        else:
+            selected_index = 0
+            start_index = 0
+            end_index = 0
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return None
@@ -213,7 +279,6 @@ def run_menu() -> Optional[dict]:
                 if event.key == pygame.K_ESCAPE:
                     return None
 
-                # 刷新当前目录
                 elif event.key == pygame.K_r:
                     menu_items = build_menu_items(current_dir)
                     if menu_items:
@@ -221,12 +286,13 @@ def run_menu() -> Optional[dict]:
                     else:
                         selected_index = 0
 
-                # 退格键：快速返回上一级目录
+
                 elif event.key == pygame.K_BACKSPACE:
                     if current_dir.resolve() != LEVEL_DIR.resolve():
                         current_dir = current_dir.parent
                         menu_items = build_menu_items(current_dir)
                         selected_index = 0
+                        menu_changed = True
 
                 elif event.key == pygame.K_UP:
                     if menu_items:
@@ -237,51 +303,56 @@ def run_menu() -> Optional[dict]:
                         selected_index = (selected_index + 1) % len(menu_items)
 
                 elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                    if not menu_items:
-                        continue
+                    result = activate_selected()
+                    if result is not None:
+                        return result
 
-                    item = menu_items[selected_index]
-                    item_type = item["type"]
-                    item_path = item["path"]
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mx, my = event.pos
 
-                    if item_type == "edit":
-                        return {"action": "edit", "dir": current_dir}
+                if menu_items:
+                    clicked_index = None
 
-                    elif item_type == "back":
-                        current_dir = item_path
-                        menu_items = build_menu_items(current_dir)
-                        selected_index = 0
+                    for draw_i, item_index in enumerate(range(start_index, end_index)):
+                        y = start_y + draw_i * item_height
+                        item_rect = pygame.Rect(
+                            list_left + 12,
+                            y - 3,
+                            list_width - 24,
+                            item_height - 2,
+                        )
+                        if item_rect.collidepoint(mx, my):
+                            clicked_index = item_index
+                            break
 
-                    elif item_type == "dir":
-                        current_dir = item_path
-                        menu_items = build_menu_items(current_dir)
-                        selected_index = 0
+                    if clicked_index is not None:
+                        now_ms = pygame.time.get_ticks()
+                        is_double_click = (
+                            clicked_index == last_click_index
+                            and now_ms - last_click_ms <= double_click_threshold
+                        )
 
-                    elif item_type == "level":
-                        return {"action": "play", "path": item_path}
+                        selected_index = clicked_index
+                        last_click_index = clicked_index
+                        last_click_ms = now_ms
 
-        # 若目录内容变化导致选中越界，修正
-        if menu_items:
-            selected_index = max(0, min(selected_index, len(menu_items) - 1))
-        else:
-            selected_index = 0
+                        if is_double_click:
+                            result = activate_selected()
+                            if result is not None:
+                                return result
 
-        # -----------------------------
-        # 绘制标题与说明
-        # -----------------------------
         draw_text(screen, "一起移动！游戏", 40, 26, 40, color=(235, 235, 240))
         draw_text(screen, "关卡浏览器 / 图形化选关菜单", 42, 74, 24, color=(170, 185, 210))
 
         draw_text(
             screen,
-            "操作：↑/↓ 选择，Enter 确认，Backspace 返回上级，R 刷新，Esc 退出",
+            "操作：单击选择，双击确认，↑/↓选择，Enter确认，Backspace返回上级，R刷新，Esc退出",
             40,
             120,
             24,
             color=(200, 210, 220),
         )
 
-        # 当前目录显示为相对路径，更清晰
         try:
             relative_dir = current_dir.relative_to(LEVEL_DIR)
             dir_text = "." if str(relative_dir) == "." else f"./{relative_dir.as_posix()}"
@@ -289,14 +360,6 @@ def run_menu() -> Optional[dict]:
             dir_text = str(current_dir)
 
         draw_text(screen, f"当前目录：{dir_text}", 40, 154, 24, color=(220, 210, 150))
-
-        # -----------------------------
-        # 绘制菜单列表框
-        # -----------------------------
-        list_left = 40
-        list_top = 190
-        list_width = MENU_WIDTH - 80
-        list_height = 390
 
         pygame.draw.rect(
             screen,
@@ -331,24 +394,11 @@ def run_menu() -> Optional[dict]:
                 color=(230, 230, 235),
             )
 
-            item_height = 38
-            start_y = list_top + 52
-
-            # 可见数量
-            visible_count = max(1, (list_height - 76) // item_height)
-
-            # 让当前项尽量在中间
-            half = visible_count // 2
-            start_index = max(0, selected_index - half)
-            end_index = min(len(menu_items), start_index + visible_count)
-            start_index = max(0, end_index - visible_count)
-
             for draw_i, item_index in enumerate(range(start_index, end_index)):
                 y = start_y + draw_i * item_height
                 item = menu_items[item_index]
                 is_selected = (item_index == selected_index)
 
-                # 根据类型给一点区分色彩
                 item_type = item["type"]
                 if item_type == "edit":
                     normal_color = (210, 235, 210)
@@ -396,9 +446,6 @@ def run_menu() -> Optional[dict]:
                 color=(180, 220, 180),
             )
 
-        # -----------------------------
-        # 页脚
-        # -----------------------------
         draw_text(screen, f"根关卡目录：{LEVEL_DIR}", 40, 605, 20, color=(145, 155, 170))
         draw_text(screen, "菜单顺序：编辑器 -> 返回上级 -> 文件夹 -> 关卡", 40, 632, 20, color=(145, 155, 170))
 
@@ -447,8 +494,8 @@ def run_level(level_path: Path) -> None:
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit(0)
+                running = False
+                break
 
             if event.type == pygame.KEYDOWN:
                 # ESC：退出当前关卡，回到选关菜单
@@ -481,7 +528,6 @@ def run_level(level_path: Path) -> None:
                     print(event.key, " pressed")
                     move_name = key_to_move[event.key]
                     new_level = move_level(level, move_name)
-
                     # 只有发生变化时才更新状态
                     if new_level.actors != level.actors:
                         level = new_level
@@ -525,11 +571,13 @@ def main() -> None:
     逻辑：
     1. 进入图形化目录菜单
     2. 用户选择关卡 / 编辑器 / 退出
-    3. 若进入关卡，关卡结束后再回到菜单
-    4. 若进入编辑器，编辑器关闭后也回到菜单
+    3. 若进入关卡，关卡结束后回到之前所在目录
+    4. 若进入编辑器，编辑器关闭后也回到之前所在目录
     """
+    last_menu_dir = LEVEL_DIR
+
     while True:
-        choice = run_menu()
+        choice = run_menu(start_dir=last_menu_dir)
 
         if choice is None:
             pygame.quit()
@@ -537,6 +585,7 @@ def main() -> None:
             return
 
         action = choice.get("action")
+        last_menu_dir = choice.get("menu_dir", last_menu_dir)
 
         if action == "edit":
             run_editor(level_dir=choice["dir"])
