@@ -68,6 +68,8 @@ from core import (
     draw_goal,
     draw_terrain,
 )
+from game_rules import GOAL_RED, GOAL_YELLOW, GOAL_BLUE, GOAL_GREEN, GOAL_BALL, ACTOR_RED, ACTOR_YELLOW, ACTOR_BLUE, \
+    ACTOR_GREEN, ACTOR_BALL, actor_name
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_LEVEL_DIR = BASE_DIR / "levels"
@@ -86,12 +88,20 @@ TERRAIN_RESOURCES = [
 
 GOAL_RESOURCES = [
     {"id": GOAL_EMPTY, "name": "无目标"},
-    {"id": GOAL_SOIL, "name": "土人目标"},
+    {"id": GOAL_RED, "name": "红色目标"},
+    {"id": GOAL_YELLOW, "name": "黄色目标"},
+    {"id": GOAL_BLUE, "name": "蓝色目标"},
+    {"id": GOAL_GREEN, "name": "绿色目标"},
+    {"id": GOAL_BALL, "name": "小球目标"},
 ]
 
 ACTOR_RESOURCES = [
     {"id": ACTOR_EMPTY, "name": "无角色"},
-    {"id": ACTOR_SOIL, "name": "土人"},
+    {"id": ACTOR_RED, "name": "红色角色"},
+    {"id": ACTOR_YELLOW, "name": "黄色角色"},
+    {"id": ACTOR_BLUE, "name": "蓝色角色"},
+    {"id": ACTOR_GREEN, "name": "绿色角色"},
+    {"id": ACTOR_BALL, "name": "白色小球"},
 ]
 
 RESOURCE_GROUPS = {
@@ -217,7 +227,10 @@ def _serialize_state_space_payload(level: LevelData, graph_result, max_steps: in
     return {
         "static_level": level_to_dict(level),
         "states": [
-            [{"x": int(x), "y": int(y)} for x, y in state]
+            [
+                {"x": int(x), "y": int(y), "actor_id": int(actor_id)}
+                for x, y, actor_id in state
+            ]
             for state in graph_result.states
         ],
         "depths": [int(d) for d in graph_result.depths],
@@ -1491,7 +1504,10 @@ def _draw_arrow(screen, start, end, color, radius_px: int, width: int = 2) -> No
 def run_state_space_viewer(json_path: Path) -> None:
     payload = json.loads(Path(json_path).read_text(encoding="utf-8"))
     static_level = _level_from_payload(payload["static_level"])
-    states = [tuple((int(item["x"]), int(item["y"])) for item in state) for state in payload["states"]]
+    states = [
+        tuple((int(item["x"]), int(item["y"]), int(item["actor_id"])) for item in state)
+        for state in payload["states"]
+    ]
     depths = [int(x) for x in payload["depths"]]
     edges = [(int(item["src"]), int(item["dst"]), item["move"]) for item in payload["edges"]]
     parents = payload.get("parents", [None] * len(states))
@@ -1771,7 +1787,10 @@ def run_state_space_viewer(json_path: Path) -> None:
                 cell_size=cell_size,
             )
 
-            actor_text = "角色位置：" + ", ".join(f"({x},{y})" for x, y in states[selected_index])
+            actor_text = "角色状态：" + ", ".join(
+                f"{actor_name(actor_id)}@({x},{y})"
+                for x, y, actor_id in states[selected_index]
+            )
             draw_text(screen, actor_text[:36], side_rect.left + 18, preview_rect.bottom + 18, 18, SUB_TEXT_COLOR)
             if len(actor_text) > 36:
                 draw_text(screen, actor_text[36:72], side_rect.left + 18, preview_rect.bottom + 40, 18, SUB_TEXT_COLOR)

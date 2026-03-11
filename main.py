@@ -40,7 +40,6 @@ from core import (
     BG_COLOR,
     CELL_SIZE,
     MOVE_TO_CHAR,
-    # build_position_mapping_for_animation,
     draw_level,
     draw_text,
     is_victory,
@@ -54,17 +53,10 @@ from mapedit import run_editor
 BASE_DIR = Path(__file__).resolve().parent
 LEVEL_DIR = BASE_DIR / "levels"
 
-# 选关菜单窗口尺寸
 MENU_WIDTH = 900
 MENU_HEIGHT = 700
-
-# 游戏窗口额外信息面板高度
 WINDOW_EXTRA_HEIGHT = 150
-
-# 每次移动动画时长，越小越利落
 ANIM_DURATION_MS = 140
-
-# 自动播放最短解时，两步之间的间隔
 AUTO_PLAY_DELAY_MS = 180
 
 ##################################################
@@ -96,22 +88,15 @@ def build_menu_items(current_dir: Path) -> List[Dict[str, Any]]:
     2. 返回上一级（若当前目录不是根目录）
     3. 所有子文件夹
     4. 所有关卡文件
-
-    每个菜单项都是一个字典，至少包含：
-    - type: 项类型，可能为 "edit" / "back" / "dir" / "level"
-    - label: 显示文本
-    - path: 对应路径（edit/back 也会保留当前相关路径，方便后续处理）
     """
     items: List[Dict[str, Any]] = []
 
-    # 第一个固定选项：进入编辑器
     items.append({
         "type": "edit",
         "label": "[编辑器] 打开当前目录地图编辑器",
         "path": current_dir,
     })
 
-    # 若不是根目录，则允许返回上一级
     if current_dir.resolve() != LEVEL_DIR.resolve():
         items.append({
             "type": "back",
@@ -119,7 +104,6 @@ def build_menu_items(current_dir: Path) -> List[Dict[str, Any]]:
             "path": current_dir.parent,
         })
 
-    # 子目录
     for subdir in list_subdirs(current_dir):
         items.append({
             "type": "dir",
@@ -127,7 +111,6 @@ def build_menu_items(current_dir: Path) -> List[Dict[str, Any]]:
             "path": subdir,
         })
 
-    # 关卡文件
     for level_file in list_level_files_in(current_dir):
         items.append({
             "type": "level",
@@ -136,31 +119,16 @@ def build_menu_items(current_dir: Path) -> List[Dict[str, Any]]:
         })
 
     return items
-# 辅助函数
 ##################################################
 ##################################################
 
 
 def list_level_files() -> List[Path]:
-    """
-    列出 levels 目录下所有 json 文件。
-
-    这里统一在进入菜单时、刷新菜单时调用。
-    """
     LEVEL_DIR.mkdir(parents=True, exist_ok=True)
     return sorted(LEVEL_DIR.glob("*.json"))
 
 
 def format_solution(solution: Optional[List[str]]) -> str:
-    """
-    把解格式化为简短字符串，便于显示在界面上。
-    例如 ["up", "left", "left"] -> "ULL"
-
-    返回说明：
-    - None：无解或超出搜索上限
-    - []：初始状态已通关
-    - 其他：用 UDLR 形式显示
-    """
     if solution is None:
         return "无解 / 超出搜索上限"
     if not solution:
@@ -169,28 +137,6 @@ def format_solution(solution: Optional[List[str]]) -> str:
 
 
 def run_menu(start_dir: Optional[Path] = None) -> Optional[dict]:
-    """
-    运行 pygame 图形化选关菜单（目录浏览器版）。
-
-    返回：
-    - {"action": "play", "path": Path(...)}：
-        用户选择了某个关卡文件，准备开始游戏
-
-    - {"action": "edit", "dir": Path(...)}：
-        用户选择进入当前目录的地图编辑器
-
-    - None：
-        用户退出程序
-
-    菜单操作：
-    - ↑ / ↓：移动高亮项
-    - Enter：确认当前选项
-    - 鼠标单击：仅选中
-    - 鼠标双击：确认当前项
-    - Backspace：若当前不是根目录，则返回上一级目录
-    - R：刷新当前目录
-    - Esc：退出程序
-    """
     pygame.init()
     pygame.display.set_caption("一起移动！游戏 - 关卡浏览")
     screen = pygame.display.set_mode((MENU_WIDTH, MENU_HEIGHT))
@@ -204,7 +150,7 @@ def run_menu(start_dir: Optional[Path] = None) -> Optional[dict]:
 
     last_click_index = -1
     last_click_ms = 0
-    double_click_threshold = 350  # 毫秒
+    double_click_threshold = 350
 
     def activate_selected() -> Optional[dict]:
         nonlocal current_dir, menu_items, selected_index, menu_changed
@@ -250,7 +196,6 @@ def run_menu(start_dir: Optional[Path] = None) -> Optional[dict]:
         screen.fill((22, 24, 30))
         menu_changed = False
 
-        # 先计算列表区域参数，鼠标事件和绘制都共用
         list_left = 40
         list_top = 190
         list_width = MENU_WIDTH - 80
@@ -285,7 +230,6 @@ def run_menu(start_dir: Optional[Path] = None) -> Optional[dict]:
                         selected_index = max(0, min(selected_index, len(menu_items) - 1))
                     else:
                         selected_index = 0
-
 
                 elif event.key == pygame.K_BACKSPACE:
                     if current_dir.resolve() != LEVEL_DIR.resolve():
@@ -456,37 +400,20 @@ def run_menu(start_dir: Optional[Path] = None) -> Optional[dict]:
 
 
 def run_level(level_path: Path) -> None:
-    """
-    运行一个关卡。
-
-    这个函数负责完整的单关游戏流程：
-    - 读取关卡
-    - 创建窗口
-    - 处理键盘输入
-    - 播放移动动画
-    - 检测胜利
-    - 支持显示与自动播放最短解
-    """
     pygame.init()
     pygame.display.set_caption(f"一起移动！ - {level_path.name}")
 
     original_level = load_level(level_path)
-    # print(original_level)
-    # print()
     level = original_level.clone()
-    # print(level)
-    # print()
 
     win_w = level.width * CELL_SIZE + 200
     win_h = level.height * CELL_SIZE + 150
     screen = pygame.display.set_mode((win_w, win_h))
     clock = pygame.time.Clock()
 
-    # 解答缓存：按 H 后才真正计算
     cached_solution: Optional[List[str]] = None
     last_solution_text = "尚未求解"
 
-    # 自动播放状态
     auto_play_queue: List[str] = []
     auto_play_next_ms = 0
 
@@ -500,21 +427,17 @@ def run_level(level_path: Path) -> None:
                 break
 
             if event.type == pygame.KEYDOWN:
-                # ESC：退出当前关卡，回到选关菜单
                 if event.key == pygame.K_ESCAPE:
-                    print("ESC pressed")
                     running = False
                     break
 
                 if event.key == pygame.K_r:
-                    print("R pressed")
                     level = original_level.clone()
                     won = is_victory(level)
                     auto_play_queue.clear()
                     continue
 
                 if event.key == pygame.K_h:
-                    print("H pressed")
                     cached_solution = solve_level_bfs(level)
                     last_solution_text = format_solution(cached_solution)
                     continue
@@ -527,20 +450,16 @@ def run_level(level_path: Path) -> None:
                 }
 
                 if event.key in key_to_move and not won:
-                    print(event.key, " pressed")
                     move_name = key_to_move[event.key]
                     new_level = move_level(level, move_name)
-                    # 只有发生变化时才更新状态
                     if new_level.actors != level.actors:
                         level = new_level
                         won = is_victory(level)
 
         screen.fill(BG_COLOR)
 
-        # 绘制地图部分
-        draw_level(screen,level,100,0,CELL_SIZE)
+        draw_level(screen, level, 100, 0, CELL_SIZE)
 
-        # 信息面板
         panel_y = level.height * CELL_SIZE
         pygame.draw.rect(screen, (28, 30, 36), (0, panel_y, win_w, WINDOW_EXTRA_HEIGHT))
         draw_text(screen, f"关卡: {level.name}", 14, panel_y + 10, 26)
@@ -552,7 +471,7 @@ def run_level(level_path: Path) -> None:
         else:
             draw_text(
                 screen,
-                "过关规则：所有角色均到达目标位置",
+                "过关规则：所有目标都必须由对应角色占据",
                 14,
                 panel_y + 108,
                 22,
@@ -563,19 +482,9 @@ def run_level(level_path: Path) -> None:
         clock.tick(60)
 
     pygame.display.quit()
-    # 这里不调用 pygame.quit()，因为用户可能还要继续回到菜单或进编辑器。
 
 
 def main() -> None:
-    """
-    程序主循环。
-
-    逻辑：
-    1. 进入图形化目录菜单
-    2. 用户选择关卡 / 编辑器 / 退出
-    3. 若进入关卡，关卡结束后回到之前所在目录
-    4. 若进入编辑器，编辑器关闭后也回到之前所在目录
-    """
     last_menu_dir = LEVEL_DIR
 
     while True:

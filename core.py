@@ -1,15 +1,14 @@
-## core.py
-
 """
 core.py
 =======
-本文件负责“核心规则层 + 基础绘制层”。
+负责：
+1. 关卡数据结构与读写；
+2. 基础绘制；
+3. BFS 求解与状态空间分析；
+4. 对外兼容的 move_level / is_victory 等接口。
 
-设计目标：
-1. 将“地图数据结构”和“游戏规则”集中放在一个文件里，方便以后扩展。
-2. 将“绘制地形 / 角色 / 目标”的入口统一到一起，方便以后替换美术资源。
-3. 将“移动计算”“胜利判定”“关卡读写”封装成函数，方便 main.py / solve.py / mapedit.py 共用。
-4. 注释尽量详细，便于后续继续扩展新的角色、地形、目标类型。
+地形 / 角色 / 目标的具体定义，以及它们的移动与胜利逻辑，
+已经统一迁移到 game_rules.py 中，方便后续集中扩展。
 """
 
 from __future__ import annotations
@@ -18,34 +17,51 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pygame
 
-TERRAIN_VOID = 0
-TERRAIN_FLOOR = 1
-TERRAIN_STONE = 2
-
-ACTOR_EMPTY = 0
-ACTOR_SOIL = 1
-
-GOAL_EMPTY = 0
-GOAL_SOIL = 1
-
-DIRS: Dict[str, Tuple[int, int]] = {
-    "up": (0, -1),
-    "down": (0, 1),
-    "left": (-1, 0),
-    "right": (1, 0),
-}
-
-MOVE_TO_CHAR = {
-    "up": "↑",
-    "down": "↓",
-    "left": "←",
-    "right": "→",
-}
-CHAR_TO_MOVE = {v: k for k, v in MOVE_TO_CHAR.items()}
+from game_rules import (
+    ACTOR_BALL,
+    ACTOR_BLUE,
+    ACTOR_DEFS,
+    ACTOR_EMPTY,
+    ACTOR_GREEN,
+    ACTOR_RED,
+    ACTOR_RESOURCES,
+    ACTOR_SOIL,
+    ACTOR_YELLOW,
+    ActorState,
+    BASE_BRUSH_BY_GROUP,
+    CHAR_TO_MOVE,
+    DEFAULT_VICTORY_MODE,
+    DIRS,
+    GOAL_BALL,
+    GOAL_BLUE,
+    GOAL_DEFS,
+    GOAL_EMPTY,
+    GOAL_GREEN,
+    GOAL_RED,
+    GOAL_RESOURCES,
+    GOAL_SOIL,
+    GOAL_YELLOW,
+    MOVE_TO_CHAR,
+    RESOURCE_GROUPS,
+    TERRAIN_DEFS,
+    TERRAIN_FLOOR,
+    TERRAIN_RESOURCES,
+    TERRAIN_STONE,
+    TERRAIN_VOID,
+    actor_def,
+    actor_name,
+    actor_state_from_level,
+    goal_def,
+    is_inside,
+    is_victory_state,
+    is_walkable_terrain,
+    move_actor_state,
+    terrain_def,
+)
 
 CELL_SIZE = 56
 EDITOR_PANEL_WIDTH = 430
@@ -57,15 +73,6 @@ PANEL_COLOR = (34, 35, 40)
 BUTTON_COLOR = (70, 72, 82)
 BUTTON_HOVER_COLOR = (95, 98, 112)
 SELECT_COLOR = (240, 212, 92)
-
-COLOR_VOID = (18, 18, 22)
-COLOR_FLOOR = (170, 139, 90)
-COLOR_STONE = (110, 110, 116)
-COLOR_SOIL = (140, 90, 48)
-COLOR_GOAL_SOIL = (90, 220, 120)
-
-DEFAULT_VICTORY_MODE = "all_actors_on_goals"
-ActorState = Tuple[Tuple[int, int], ...]
 
 
 @dataclass
@@ -116,13 +123,11 @@ class Button:
         draw_text_center(surface, self.text, self.rect.center, 22)
 
 
-
 def create_empty_level(width: int, height: int, name: str = "新关卡") -> LevelData:
     terrain = [[TERRAIN_FLOOR for _ in range(width)] for _ in range(height)]
     actors = [[ACTOR_EMPTY for _ in range(width)] for _ in range(height)]
     goals = [[GOAL_EMPTY for _ in range(width)] for _ in range(height)]
     return LevelData(name=name, width=width, height=height, terrain=terrain, actors=actors, goals=goals)
-
 
 
 def level_to_dict(level: LevelData) -> dict:
@@ -135,7 +140,6 @@ def level_to_dict(level: LevelData) -> dict:
         "goals": level.goals,
         "victory_mode": level.victory_mode,
     }
-
 
 
 def validate_level_dict(data: dict) -> None:
@@ -161,7 +165,6 @@ def validate_level_dict(data: dict) -> None:
                     raise ValueError(f"{layer_name} 中必须全为整数")
 
 
-
 def load_level(path: str | Path) -> LevelData:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -177,7 +180,6 @@ def load_level(path: str | Path) -> LevelData:
     )
 
 
-
 def save_level(level: LevelData, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -185,137 +187,15 @@ def save_level(level: LevelData, path: str | Path) -> None:
         json.dump(level_to_dict(level), f, ensure_ascii=False, indent=2)
 
 
-
-def actor_state_from_level(level: LevelData) -> ActorState:
-    result = []
-    for y in range(level.height):
-        for x in range(level.width):
-            if level.actors[y][x] != ACTOR_EMPTY:
-                result.append((x, y))
-    result.sort()
-    return tuple(result)
-
-
-
 def level_from_actor_state(level: LevelData, state: ActorState) -> LevelData:
     new_level = level.clone()
     for y in range(new_level.height):
         for x in range(new_level.width):
             new_level.actors[y][x] = ACTOR_EMPTY
-    for x, y in state:
+    for x, y, actor_id in state:
         if 0 <= x < new_level.width and 0 <= y < new_level.height:
-            new_level.actors[y][x] = ACTOR_SOIL
+            new_level.actors[y][x] = actor_id
     return new_level
-
-
-
-def is_inside(level: LevelData, x: int, y: int) -> bool:
-    return 0 <= x < level.width and 0 <= y < level.height
-
-
-
-def is_walkable_terrain(level: LevelData, x: int, y: int) -> bool:
-    if not is_inside(level, x, y):
-        return False
-    return level.terrain[y][x] == TERRAIN_FLOOR
-
-
-
-def is_victory_state(level: LevelData, state: ActorState) -> bool:
-    actor_set = set(state)
-    goal_cells = {
-        (x, y)
-        for y in range(level.height)
-        for x in range(level.width)
-        if level.goals[y][x] == GOAL_SOIL
-    }
-
-    if level.victory_mode == "any":
-        return len(actor_set & goal_cells) > 0
-    return goal_cells.issubset(actor_set) if goal_cells else False
-
-
-
-def _group_actors_for_move(state: ActorState, move_name: str) -> List[List[Tuple[int, int]]]:
-    dx, dy = DIRS[move_name]
-    actor_set = set(state)
-    visited: Set[Tuple[int, int]] = set()
-    groups: List[List[Tuple[int, int]]] = []
-
-    if dx != 0:
-        order = sorted(state, key=lambda p: (p[1], p[0]))
-        for x, y in order:
-            if (x, y) in visited:
-                continue
-            left = x
-            while (left - 1, y) in actor_set:
-                left -= 1
-            chain = []
-            cur = left
-            while (cur, y) in actor_set:
-                chain.append((cur, y))
-                visited.add((cur, y))
-                cur += 1
-            groups.append(chain)
-    else:
-        order = sorted(state, key=lambda p: (p[0], p[1]))
-        for x, y in order:
-            if (x, y) in visited:
-                continue
-            top = y
-            while (x, top - 1) in actor_set:
-                top -= 1
-            chain = []
-            cur = top
-            while (x, cur) in actor_set:
-                chain.append((x, cur))
-                visited.add((x, cur))
-                cur += 1
-            groups.append(chain)
-
-    if dx > 0:
-        groups.sort(key=lambda g: (g[0][1], g[-1][0]))
-    elif dx < 0:
-        groups.sort(key=lambda g: (g[0][1], g[0][0]))
-    elif dy > 0:
-        groups.sort(key=lambda g: (g[0][0], g[-1][1]))
-    else:
-        groups.sort(key=lambda g: (g[0][0], g[0][1]))
-
-    return groups
-
-
-
-def move_actor_state(level: LevelData, state: ActorState, move_name: str) -> ActorState:
-    if move_name not in DIRS:
-        return state
-
-    dx, dy = DIRS[move_name]
-    actor_set = set(state)
-    moving_set: Set[Tuple[int, int]] = set()
-
-    groups = _group_actors_for_move(state, move_name)
-    group_can_move: List[bool] = []
-
-    for group in groups:
-        front_x, front_y = max(group, key=lambda p: p[0] * dx + p[1] * dy)
-        nx, ny = front_x + dx, front_y + dy
-        can_move = is_walkable_terrain(level, nx, ny) and ((nx, ny) not in actor_set)
-        group_can_move.append(can_move)
-        if can_move:
-            moving_set.update(group)
-
-    new_positions = []
-    for group, can_move in zip(groups, group_can_move):
-        for x, y in group:
-            if can_move:
-                new_positions.append((x + dx, y + dy))
-            else:
-                new_positions.append((x, y))
-
-    new_positions.sort()
-    return tuple(new_positions)
-
 
 
 def _reconstruct_solution_from_indices(parents, parent_moves, solution_index: int) -> List[str]:
@@ -330,7 +210,6 @@ def _reconstruct_solution_from_indices(parents, parent_moves, solution_index: in
         cur = prev
     path.reverse()
     return path
-
 
 
 def analyze_level_state_graph(level: LevelData, max_states: int = 200000, max_depth: Optional[int] = None) -> StateGraphResult:
@@ -399,23 +278,19 @@ def analyze_level_state_graph(level: LevelData, max_states: int = 200000, max_de
     )
 
 
-
-def solve_level_bfs(level: LevelData, max_states: int = 200000) -> Optional[List[str]]:
-    result = analyze_level_state_graph(level, max_states=max_states, max_depth=None)
+def solve_level_bfs(level: LevelData, max_states: int = 200000, max_depth: Optional[int] = None) -> Optional[List[str]]:
+    result = analyze_level_state_graph(level, max_states=max_states, max_depth=max_depth)
     return result.solution_moves
-
 
 
 def _get_font(size: int) -> pygame.font.Font:
     return pygame.font.SysFont("microsoftyahei,simhei,arial", size)
 
 
-
 def draw_text(surface: pygame.Surface, text: str, x: int, y: int, size: int = 24, color=TEXT_COLOR) -> None:
     font = _get_font(size)
     img = font.render(text, True, color)
     surface.blit(img, (x, y))
-
 
 
 def draw_text_center(surface: pygame.Surface, text: str, center: Tuple[int, int], size: int = 24, color=TEXT_COLOR) -> None:
@@ -425,68 +300,82 @@ def draw_text_center(surface: pygame.Surface, text: str, center: Tuple[int, int]
     surface.blit(img, rect)
 
 
-
 def terrain_color(terrain_id: int) -> Tuple[int, int, int]:
-    if terrain_id == TERRAIN_FLOOR:
-        return COLOR_FLOOR
-    if terrain_id == TERRAIN_STONE:
-        return COLOR_STONE
-    return COLOR_VOID
-
+    return terrain_def(terrain_id).base_color
 
 
 def goal_color(goal_id: int):
-    if goal_id == GOAL_SOIL:
-        return COLOR_SOIL
-    return None
-
+    info = goal_def(goal_id)
+    return None if info is None else info.color
 
 
 def draw_terrain(surface: pygame.Surface, rect: pygame.Rect, terrain_id: int) -> None:
-    pygame.draw.rect(surface, terrain_color(terrain_id), rect)
-    if terrain_id == TERRAIN_STONE:
+    info = terrain_def(terrain_id)
+    pygame.draw.rect(surface, info.base_color, rect)
+
+    if info.style == "stone":
         margin = 8
         pygame.draw.rect(surface, (90, 90, 96), rect.inflate(-8, -8), border_radius=6)
         pygame.draw.line(surface, (140, 140, 148), (rect.left + margin, rect.centery), (rect.right - margin, rect.centery), 2)
         pygame.draw.line(surface, (140, 140, 148), (rect.centerx, rect.top + margin), (rect.centerx, rect.bottom - margin), 2)
-    elif terrain_id == TERRAIN_FLOOR:
+    elif info.style == "floor":
         pygame.draw.rect(surface, (196, 163, 108), rect, 2)
     else:
         pygame.draw.rect(surface, (30, 30, 35), rect, 1)
 
 
-
 def draw_goal(surface: pygame.Surface, rect: pygame.Rect, goal_id: int) -> None:
-    color = goal_color(goal_id)
-    if color is None:
+    info = goal_def(goal_id)
+    if info is None:
         return
-    margin = max(1, min(rect.width, rect.height) // 12)
-    border_width = max(2, min(rect.width, rect.height) // 12)
-    inner_rect = pygame.Rect(rect.x + margin, rect.y + margin, rect.width - 2 * margin, rect.height - 2 * margin)
-    pygame.draw.rect(surface, color, inner_rect, border_width)
 
+    margin = max(2, min(rect.width, rect.height) // 10)
+    border_width = max(2, min(rect.width, rect.height) // 10)
+    inner_rect = pygame.Rect(rect.x + margin, rect.y + margin, rect.width - 2 * margin, rect.height - 2 * margin)
+
+    if info.shape == "circle":
+        pygame.draw.ellipse(surface, info.color, inner_rect, border_width)
+    else:
+        pygame.draw.rect(surface, info.color, inner_rect, border_width)
+
+
+def _draw_blob_actor(surface: pygame.Surface, rect: pygame.Rect, color: Tuple[int, int, int], bob_phase: float = 0.0) -> None:
+    cx, cy = rect.center
+    body_rect = pygame.Rect(0, 0, int(rect.width * 0.58), int(rect.height * 0.58))
+    body_rect.center = (cx, cy + int(math.sin(bob_phase) * 2))
+    pygame.draw.ellipse(surface, color, body_rect)
+    outline = tuple(max(0, c - 55) for c in color)
+    pygame.draw.ellipse(surface, outline, body_rect, 2)
+    eye_y = body_rect.y + body_rect.height * 0.4
+    eye_dx = body_rect.width * 0.18
+    pygame.draw.circle(surface, (22, 22, 22), (int(cx - eye_dx), int(eye_y)), max(2, rect.width // 18))
+    pygame.draw.circle(surface, (22, 22, 22), (int(cx + eye_dx), int(eye_y)), max(2, rect.width // 18))
+
+
+def _draw_ball_actor(surface: pygame.Surface, rect: pygame.Rect, color: Tuple[int, int, int]) -> None:
+    margin = rect.width // 2
+    circle_rect = rect.inflate(-margin, -margin)
+    pygame.draw.ellipse(surface, color, circle_rect)
+    # pygame.draw.ellipse(surface, (120, 120, 120), circle_rect, 2)
+    shine = pygame.Rect(circle_rect.x + circle_rect.width // 5, circle_rect.y + circle_rect.height // 6, circle_rect.width // 4, circle_rect.height // 4)
+    pygame.draw.ellipse(surface, (255, 255, 255), shine)
 
 
 def draw_actor(surface: pygame.Surface, rect: pygame.Rect, actor_id: int, bob_phase: float = 0.0) -> None:
     if actor_id == ACTOR_EMPTY:
         return
-    if actor_id == ACTOR_SOIL:
-        cx, cy = rect.center
-        body_rect = pygame.Rect(0, 0, int(rect.width * 0.58), int(rect.height * 0.58))
-        body_rect.center = (cx, cy + int(math.sin(bob_phase) * 2))
-        pygame.draw.ellipse(surface, COLOR_SOIL, body_rect)
-        pygame.draw.ellipse(surface, (90, 58, 28), body_rect, 2)
-        eye_y = body_rect.y + body_rect.height * 0.4
-        eye_dx = body_rect.width * 0.18
-        pygame.draw.circle(surface, (22, 22, 22), (int(cx - eye_dx), int(eye_y)), max(2, rect.width // 18))
-        pygame.draw.circle(surface, (22, 22, 22), (int(cx + eye_dx), int(eye_y)), max(2, rect.width // 18))
-
+    info = actor_def(actor_id)
+    if info is None:
+        return
+    if info.style == "ball":
+        _draw_ball_actor(surface, rect, info.color)
+    else:
+        _draw_blob_actor(surface, rect, info.color, bob_phase)
 
 
 def draw_cell_overlay(surface: pygame.Surface, x: int, y: int, size: int) -> None:
     r = pygame.Rect(x, y, size, size)
     pygame.draw.rect(surface, SELECT_COLOR, r, 3)
-
 
 
 def draw_level(surface: pygame.Surface, level: LevelData, offset_x: int = 0, offset_y: int = 0, cell_size: int = CELL_SIZE) -> None:
@@ -503,24 +392,14 @@ def draw_level(surface: pygame.Surface, level: LevelData, offset_x: int = 0, off
 
 
 # =============================================================================
-# 兼容旧版 main.py 的接口
+# 兼容旧版接口
 # =============================================================================
 
 def is_victory(level: LevelData) -> bool:
-    """
-    兼容旧接口：
-    直接对当前 level 的 actors 布局判断是否胜利。
-    """
-    state = actor_state_from_level(level)
-    return is_victory_state(level, state)
+    return is_victory_state(level, actor_state_from_level(level))
 
 
 def move_level(level: LevelData, move_name: str) -> LevelData:
-    """
-    兼容旧接口：
-    输入一个关卡对象和方向，返回移动后的新关卡对象。
-    不修改原 level。
-    """
     old_state = actor_state_from_level(level)
     new_state = move_actor_state(level, old_state, move_name)
     return level_from_actor_state(level, new_state)
