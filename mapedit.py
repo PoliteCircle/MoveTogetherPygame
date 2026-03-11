@@ -3,7 +3,7 @@
 """
 mapedit.py
 ==========
-pygame 图形化地图编辑器（支持中文输入法 + 关卡名/文件名统一 + 30步内求解）。
+pygame 图形化地图编辑器（支持中文输入法 + 关卡名/文件名统一 + BFS求解）。
 
 本版本特点：
 1. 右侧只保留“地形 / 目标位置 / 角色”三个资源类别按钮。
@@ -20,9 +20,9 @@ pygame 图形化地图编辑器（支持中文输入法 + 关卡名/文件名统
    - 使用 pygame.TEXTINPUT 接收已确认文本
    - 使用 pygame.TEXTEDITING 显示预编辑串
    - 进入输入时启动 start_text_input()，退出时 stop_text_input()
-7. 增加“求30步内最短解”按钮：
+7. 增加“求最短解”按钮：
    - 调用 core.solve_level_bfs()
-   - 若无解或最短解大于30步，则显示“30步内无解”
+   - 若无解或已搜索过大空间则显示“无解”
 8. 三类资源均通过数组配置，方便后续扩展。
 """
 
@@ -2018,4 +2018,3 @@ if __name__ == "__main__":
         run_state_space_viewer(Path(sys.argv[2]))
     else:
         run_editor()
-
