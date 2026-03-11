@@ -31,7 +31,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -39,37 +38,42 @@ import pygame
 import shutil
 
 from core import (
-    ACTOR_EMPTY,
-    ACTOR_SOIL,
-    BG_COLOR,
-    Button,
-    CELL_SIZE,
-    EDITOR_PANEL_WIDTH,
-    GOAL_EMPTY,
-    GOAL_SOIL,
-    MOVE_TO_CHAR,
-    PANEL_COLOR,
-    SUB_TEXT_COLOR,
-    TERRAIN_FLOOR,
-    TERRAIN_STONE,
-    TERRAIN_VOID,
     LevelData,
     analyze_level_state_graph,
     create_empty_level,
-    draw_cell_overlay,
-    draw_level,
-    draw_text,
     level_from_actor_state,
     level_to_dict,
     load_level,
     save_level,
-    solve_level_bfs,
-    draw_actor,
-    draw_goal,
-    draw_terrain,
+    # solve_level_bfs,
 )
-from game_rules import GOAL_RED, GOAL_YELLOW, GOAL_BLUE, GOAL_GREEN, GOAL_BALL, ACTOR_RED, ACTOR_YELLOW, ACTOR_BLUE, \
-    ACTOR_GREEN, ACTOR_BALL, actor_name
+
+from game_render import (
+    BG_COLOR,
+    Button,
+    CELL_SIZE,
+    EDITOR_PANEL_WIDTH,
+    PANEL_COLOR,
+    SUB_TEXT_COLOR,
+    draw_actor,
+    draw_cell_overlay,
+    draw_goal,
+    draw_level,
+    draw_terrain,
+    draw_text,
+)
+
+from game_rules import (
+    ACTOR_EMPTY,
+    GOAL_EMPTY,
+    TERRAIN_FLOOR,
+    TERRAIN_VOID,
+    actor_name,
+    can_place_actor,
+    can_place_goal,
+    get_base_brush_by_group,
+    get_resource_groups, MOVE_TO_CHAR,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_LEVEL_DIR = BASE_DIR / "levels"
@@ -77,44 +81,11 @@ MAX_SOLUTION_STEPS = 30
 
 
 # =============================================================================
-# 可扩展资源配置
+# 可扩展资源配置 统一从 game_rules.py 读取
 # =============================================================================
 
-TERRAIN_RESOURCES = [
-    {"id": TERRAIN_VOID, "name": "虚空"},
-    {"id": TERRAIN_FLOOR, "name": "平地"},
-    {"id": TERRAIN_STONE, "name": "石头"},
-]
 
-GOAL_RESOURCES = [
-    {"id": GOAL_EMPTY, "name": "无目标"},
-    {"id": GOAL_RED, "name": "红色目标"},
-    {"id": GOAL_YELLOW, "name": "黄色目标"},
-    {"id": GOAL_BLUE, "name": "蓝色目标"},
-    {"id": GOAL_GREEN, "name": "绿色目标"},
-    {"id": GOAL_BALL, "name": "小球目标"},
-]
 
-ACTOR_RESOURCES = [
-    {"id": ACTOR_EMPTY, "name": "无角色"},
-    {"id": ACTOR_RED, "name": "红色角色"},
-    {"id": ACTOR_YELLOW, "name": "黄色角色"},
-    {"id": ACTOR_BLUE, "name": "蓝色角色"},
-    {"id": ACTOR_GREEN, "name": "绿色角色"},
-    {"id": ACTOR_BALL, "name": "白色小球"},
-]
-
-RESOURCE_GROUPS = {
-    "terrain": {"title": "选择地形", "items": TERRAIN_RESOURCES},
-    "goal": {"title": "选择目标位置", "items": GOAL_RESOURCES},
-    "actor": {"title": "选择角色", "items": ACTOR_RESOURCES},
-}
-
-BASE_BRUSH_BY_GROUP = {
-    "terrain": TERRAIN_FLOOR,   # 右键恢复为平地
-    "goal": GOAL_EMPTY,         # 右键恢复为无目标
-    "actor": ACTOR_EMPTY,       # 右键恢复为无角色
-}
 # =============================================================================
 # 工具函数
 # =============================================================================
@@ -199,11 +170,13 @@ def apply_brush(level: LevelData, x: int, y: int, brush_group: str, brush_id: in
         if brush_id == TERRAIN_VOID:
             level.actors[y][x] = ACTOR_EMPTY
             level.goals[y][x] = GOAL_EMPTY
+
     elif brush_group == "goal":
-        if level.terrain[y][x] != TERRAIN_VOID:
+        if can_place_goal(level, x, y):
             level.goals[y][x] = brush_id
+
     elif brush_group == "actor":
-        if level.terrain[y][x] != TERRAIN_VOID:
+        if can_place_actor(level, x, y):
             level.actors[y][x] = brush_id
 
 
@@ -222,55 +195,49 @@ def resize_level(old_level: LevelData, new_width: int, new_height: int) -> Level
     return new_level
 
 
-
-def _serialize_state_space_payload(level: LevelData, graph_result, max_steps: int) -> dict:
-    return {
-        "static_level": level_to_dict(level),
-        "states": [
-            [
-                {"x": int(x), "y": int(y), "actor_id": int(actor_id)}
-                for x, y, actor_id in state
-            ]
-            for state in graph_result.states
-        ],
-        "depths": [int(d) for d in graph_result.depths],
-        "edges": [
-            {"src": int(src), "dst": int(dst), "move": move}
-            for src, dst, move in graph_result.edges
-        ],
-        "parents": [None if p is None else int(p) for p in graph_result.parents],
-        "parent_moves": list(graph_result.parent_moves),
-        "start_index": int(graph_result.start_index),
-        "solution_index": None if graph_result.solution_index is None else int(graph_result.solution_index),
-        "solution_moves": graph_result.solution_moves,
-        "expanded_count": int(graph_result.expanded_count),
-        "truncated": bool(graph_result.truncated),
-        "max_steps": int(max_steps),
-    }
-
-
-
-def _create_state_space_temp_json(level: LevelData, graph_result, max_steps: int) -> Path:
-    payload = _serialize_state_space_payload(level, graph_result, max_steps)
-    temp_dir = Path(tempfile.mkdtemp(prefix="mapedit_state_space_"))
-    json_path = temp_dir / "state_space.json"
-    json_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    return json_path
-
-
-
 def open_state_space_window(editor: "EditorState") -> None:
     if editor.last_state_graph is None:
         editor.status_text = "请先求解一次，再查看状态空间"
         return
 
     try:
-        json_path = _create_state_space_temp_json(editor.level, editor.last_state_graph, MAX_SOLUTION_STEPS)
-        subprocess.Popen([sys.executable, __file__, "--state-space-json", str(json_path)])
+        import json
+        import tempfile
+
+        payload = {
+            "static_level": level_to_dict(editor.level),
+            "states": [
+                [
+                    {"x": int(x), "y": int(y), "actor_id": int(actor_id)}
+                    for x, y, actor_id in state
+                ]
+                for state in editor.last_state_graph.states
+            ],
+            "depths": [int(d) for d in editor.last_state_graph.depths],
+            "edges": [
+                {"src": int(src), "dst": int(dst), "move": move}
+                for src, dst, move in editor.last_state_graph.edges
+            ],
+            "parents": [None if p is None else int(p) for p in editor.last_state_graph.parents],
+            "parent_moves": list(editor.last_state_graph.parent_moves),
+            "start_index": int(editor.last_state_graph.start_index),
+            "solution_index": None if editor.last_state_graph.solution_index is None else int(editor.last_state_graph.solution_index),
+            "solution_moves": editor.last_state_graph.solution_moves,
+            "expanded_count": int(editor.last_state_graph.expanded_count),
+            "truncated": bool(editor.last_state_graph.truncated),
+            "max_steps": int(MAX_SOLUTION_STEPS),
+        }
+
+        temp_dir = Path(tempfile.mkdtemp(prefix="mapedit_state_space_"))
+        json_path = temp_dir / "state_space.json"
+        json_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+        viewer_path = Path(__file__).resolve().parent / "state_space.py"
+        subprocess.Popen([sys.executable, str(viewer_path), "--state-space-json", str(json_path)])
         editor.status_text = "已打开状态空间窗口"
+
     except Exception as e:
         editor.status_text = f"打开状态空间失败：{e}"
-
 
 # =============================================================================
 # 编辑器状态
@@ -280,11 +247,8 @@ class EditorState:
     def __init__(self) -> None:
         self.level: LevelData = create_empty_level(8, 8, name="新关卡")
 
-        self.selected_brush_by_group: Dict[str, int] = {
-            "terrain": TERRAIN_FLOOR,
-            "goal": GOAL_EMPTY,
-            "actor": ACTOR_EMPTY,
-        }
+        base_brushes = get_base_brush_by_group()
+        self.selected_brush_by_group: Dict[str, int] = dict(base_brushes)
         self.current_brush_group: str = "terrain"
         self.current_brush_id: int = self.selected_brush_by_group["terrain"]
 
@@ -452,7 +416,8 @@ def build_buttons(level: LevelData) -> Dict[str, Button]:
 # =============================================================================
 
 def _get_resource_modal_rect(panel_rect: pygame.Rect, group: str) -> pygame.Rect:
-    item_count = len(RESOURCE_GROUPS[group]["items"])
+    resource_groups = get_resource_groups()
+    item_count = len(resource_groups[group]["items"])
     modal_h = 78 + item_count * 50 + 18
     return pygame.Rect(panel_rect.left + 8, 150, panel_rect.width - 16, modal_h)
 
@@ -486,6 +451,9 @@ def _draw_resource_button(
     hovered: bool,
     selected: bool,
 ) -> None:
+    resource_groups = get_resource_groups()
+    base_brushes = get_base_brush_by_group()
+
     fill = (95, 98, 112) if hovered else (70, 72, 82)
     if selected:
         fill = (92, 98, 112)
@@ -499,13 +467,13 @@ def _draw_resource_button(
 
     item_name = next(
         item["name"]
-        for item in RESOURCE_GROUPS[group]["items"]
+        for item in resource_groups[group]["items"]
         if item["id"] == item_id
     )
     base_name = next(
         item["name"]
-        for item in RESOURCE_GROUPS[group]["items"]
-        if item["id"] == BASE_BRUSH_BY_GROUP[group]
+        for item in resource_groups[group]["items"]
+        if item["id"] == base_brushes[group]
     )
 
     draw_text(screen, title, thumb.right + 10, rect.y + 5, 20)
@@ -515,7 +483,7 @@ def _draw_resource_button(
 
 def _get_paint_brush_id(editor: EditorState, mouse_button: int) -> int:
     if mouse_button == 3:
-        return BASE_BRUSH_BY_GROUP[editor.current_brush_group]
+        return get_base_brush_by_group()[editor.current_brush_group]
     return editor.current_brush_id
 
 def draw_input_box(
@@ -555,11 +523,14 @@ def draw_input_box(
 
 
 def draw_resource_panel(screen: pygame.Surface, editor: EditorState, panel_rect: pygame.Rect) -> None:
+    resource_groups = get_resource_groups()
+
     if not editor.resource_panel_open or not editor.resource_panel_group:
         return
 
     group = editor.resource_panel_group
-    info = RESOURCE_GROUPS[group]
+    group_info = resource_groups[group]
+    items = group_info["items"]
 
     bg = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
     bg.fill((0, 0, 0, 120))
@@ -569,10 +540,10 @@ def draw_resource_panel(screen: pygame.Surface, editor: EditorState, panel_rect:
     pygame.draw.rect(screen, (42, 44, 52), modal, border_radius=10)
     pygame.draw.rect(screen, (108, 112, 125), modal, 2, border_radius=10)
 
-    draw_text(screen, info["title"], modal.x + 16, modal.y + 12, 26)
+    draw_text(screen, group_info["title"], modal.x + 16, modal.y + 12, 26)
 
     y = modal.y + 52
-    for item in info["items"]:
+    for item in items:
         item_rect = pygame.Rect(modal.x + 16, y, modal.width - 32, 40)
         selected = (
             editor.current_brush_group == group
@@ -920,6 +891,9 @@ def _wrap_text_to_pixel_width(text: str, font: pygame.font.Font, max_width: int)
 
 
 def draw_ui(screen: pygame.Surface, editor: EditorState, mouse_pos: Tuple[int, int]) -> Dict[str, Button]:
+    resource_groups = get_resource_groups()
+    base_brushes = get_base_brush_by_group()
+
     rects = get_rects(editor.level, screen.get_size())
     panel_rect = rects["panel"]
     solution_rect = rects["solution_rect"]
@@ -997,13 +971,13 @@ def draw_ui(screen: pygame.Surface, editor: EditorState, mouse_pos: Tuple[int, i
 
     current_name = next(
         item["name"]
-        for item in RESOURCE_GROUPS[editor.current_brush_group]["items"]
+        for item in resource_groups[editor.current_brush_group]["items"]
         if item["id"] == editor.current_brush_id
     )
     base_name = next(
         item["name"]
-        for item in RESOURCE_GROUPS[editor.current_brush_group]["items"]
-        if item["id"] == BASE_BRUSH_BY_GROUP[editor.current_brush_group]
+        for item in resource_groups[editor.current_brush_group]["items"]
+        if item["id"] == base_brushes[editor.current_brush_group]
     )
 
     draw_text(screen, f"左键：{current_name}", panel_rect.left + 18, info_y + 28, 18, SUB_TEXT_COLOR)
@@ -1157,6 +1131,8 @@ def do_solve(editor: EditorState) -> None:
 
 
 def click_resource_panel(editor: EditorState, pos: Tuple[int, int], panel_rect: pygame.Rect) -> bool:
+    resource_groups = get_resource_groups()
+
     if not editor.resource_panel_open or not editor.resource_panel_group:
         return False
 
@@ -1169,7 +1145,7 @@ def click_resource_panel(editor: EditorState, pos: Tuple[int, int], panel_rect: 
         return True
 
     y = modal.y + 52
-    for item in RESOURCE_GROUPS[group]["items"]:
+    for item in resource_groups[group]["items"]:
         item_rect = pygame.Rect(modal.x + 16, y, modal.width - 32, 40)
         if item_rect.collidepoint(pos):
             editor.selected_brush_by_group[group] = item["id"]
@@ -1842,6 +1818,8 @@ def run_state_space_viewer(json_path: Path) -> None:
 def run_editor(level_dir=None) -> None:
     pygame.init()
 
+    resource_groups = get_resource_groups()
+
     start_dir = ensure_level_dir(Path(level_dir) if level_dir is not None else DEFAULT_LEVEL_DIR)
 
     editor = EditorState()
@@ -1951,7 +1929,7 @@ def run_editor(level_dir=None) -> None:
 
                             item_name = next(
                                 item["name"]
-                                for item in RESOURCE_GROUPS[key]["items"]
+                                for item in resource_groups[key]["items"]
                                 if item["id"] == editor.current_brush_id
                             )
                             editor.status_text = f"已切换到：{item_name}"
@@ -2033,7 +2011,4 @@ def run_editor(level_dir=None) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 3 and sys.argv[1] == "--state-space-json":
-        run_state_space_viewer(Path(sys.argv[2]))
-    else:
-        run_editor()
+    run_editor()

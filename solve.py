@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 from typing import List
 
-from core import MOVE_TO_CHAR, load_level, solve_level_bfs
+from core import load_level, solve_level_bfs
 
 
 BASE_DIR = Path(__file__).resolve().parent

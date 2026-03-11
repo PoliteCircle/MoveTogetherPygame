@@ -4,15 +4,19 @@ from __future__ import annotations
 game_rules.py
 =============
 统一管理：
-1. 地形 / 角色 / 目标的定义与资源配置；
-2. 角色响应方向键、推动小球、胜利判定等规则；
-3. 供 core.py / main.py / mapedit.py 复用的元数据。
+1. 地形 / 角色 / 目标的定义；
+2. 编辑器资源面板数据；
+3. 地图可放置规则；
+4. 角色移动、推动、胜利判定等核心规则。
 
-以后想扩展新的角色、目标、被推动物体，只需要优先改这里。
+设计目标：
+- 以后新增普通角色 / 目标 / 地形时，优先只改这里；
+- main.py / mapedit.py / core.py 不再维护自己的资源表；
+- 若新对象仍使用已有绘图风格，则无需修改其他文件。
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # =============================================================================
 # 基础常量
@@ -29,9 +33,6 @@ ACTOR_BLUE = 3
 ACTOR_GREEN = 4
 ACTOR_BALL = 5
 
-# 兼容旧命名：旧关卡里的“土人”现在视为红色角色
-ACTOR_SOIL = ACTOR_RED
-
 GOAL_EMPTY = 0
 GOAL_RED = 1
 GOAL_YELLOW = 2
@@ -39,7 +40,8 @@ GOAL_BLUE = 3
 GOAL_GREEN = 4
 GOAL_BALL = 5
 
-# 兼容旧命名：旧关卡里的“土人目标”现在视为红色目标
+# 兼容旧命名
+ACTOR_SOIL = ACTOR_RED
 GOAL_SOIL = GOAL_RED
 
 DIRS: Dict[str, Tuple[int, int]] = {
@@ -64,7 +66,7 @@ ActorState = Tuple[Tuple[int, int, int], ...]
 
 
 # =============================================================================
-# 元数据定义
+# 定义类
 # =============================================================================
 
 @dataclass(frozen=True)
@@ -72,8 +74,10 @@ class TerrainDef:
     id: int
     name: str
     walkable: bool
+    accepts_actor: bool
+    accepts_goal: bool
     base_color: Tuple[int, int, int]
-    style: str = "solid"
+    render_style: str = "solid"
 
 
 @dataclass(frozen=True)
@@ -84,7 +88,7 @@ class ActorDef:
     responds_to_input: bool
     pushable: bool
     goal_id: Optional[int]
-    style: str = "blob"
+    render_style: str = "blob"
 
 
 @dataclass(frozen=True)
@@ -93,67 +97,133 @@ class GoalDef:
     name: str
     actor_id: Optional[int]
     color: Tuple[int, int, int]
-    shape: str = "square"
+    render_shape: str = "square"
 
+
+# =============================================================================
+# 可扩展注册表
+# 以后新增普通对象，主要改这里
+# =============================================================================
 
 TERRAIN_DEFS: Dict[int, TerrainDef] = {
-    TERRAIN_VOID: TerrainDef(TERRAIN_VOID, "虚空", False, (18, 18, 22), "void"),
-    TERRAIN_FLOOR: TerrainDef(TERRAIN_FLOOR, "平地", True, (170, 139, 90), "floor"),
-    TERRAIN_STONE: TerrainDef(TERRAIN_STONE, "石头", False, (110, 110, 116), "stone"),
+    TERRAIN_VOID: TerrainDef(
+        id=TERRAIN_VOID,
+        name="虚空",
+        walkable=False,
+        accepts_actor=False,
+        accepts_goal=False,
+        base_color=(18, 18, 22),
+        render_style="void",
+    ),
+    TERRAIN_FLOOR: TerrainDef(
+        id=TERRAIN_FLOOR,
+        name="平地",
+        walkable=True,
+        accepts_actor=True,
+        accepts_goal=True,
+        base_color=(170, 139, 90),
+        render_style="floor",
+    ),
+    TERRAIN_STONE: TerrainDef(
+        id=TERRAIN_STONE,
+        name="石头",
+        walkable=False,
+        accepts_actor=False,
+        accepts_goal=False,
+        base_color=(110, 110, 116),
+        render_style="stone",
+    ),
 }
 
 ACTOR_DEFS: Dict[int, ActorDef] = {
-    ACTOR_RED: ActorDef(ACTOR_RED, "红色角色", (220, 74, 74), True, False, GOAL_RED, "blob"),
-    ACTOR_YELLOW: ActorDef(ACTOR_YELLOW, "黄色角色", (236, 202, 70), True, False, GOAL_YELLOW, "blob"),
-    ACTOR_BLUE: ActorDef(ACTOR_BLUE, "蓝色角色", (74, 136, 236), True, False, GOAL_BLUE, "blob"),
-    ACTOR_GREEN: ActorDef(ACTOR_GREEN, "绿色角色", (72, 190, 116), True, False, GOAL_GREEN, "blob"),
-    ACTOR_BALL: ActorDef(ACTOR_BALL, "白色小球", (240, 240, 240), False, True, GOAL_BALL, "ball"),
+    ACTOR_RED: ActorDef(
+        id=ACTOR_RED,
+        name="红色角色",
+        color=(220, 74, 74),
+        responds_to_input=True,
+        pushable=False,
+        goal_id=GOAL_RED,
+        render_style="blob",
+    ),
+    ACTOR_YELLOW: ActorDef(
+        id=ACTOR_YELLOW,
+        name="黄色角色",
+        color=(236, 202, 70),
+        responds_to_input=True,
+        pushable=False,
+        goal_id=GOAL_YELLOW,
+        render_style="blob",
+    ),
+    ACTOR_BLUE: ActorDef(
+        id=ACTOR_BLUE,
+        name="蓝色角色",
+        color=(74, 136, 236),
+        responds_to_input=True,
+        pushable=False,
+        goal_id=GOAL_BLUE,
+        render_style="blob",
+    ),
+    ACTOR_GREEN: ActorDef(
+        id=ACTOR_GREEN,
+        name="绿色角色",
+        color=(72, 190, 116),
+        responds_to_input=True,
+        pushable=False,
+        goal_id=GOAL_GREEN,
+        render_style="blob",
+    ),
+    ACTOR_BALL: ActorDef(
+        id=ACTOR_BALL,
+        name="白色小球",
+        color=(240, 240, 240),
+        responds_to_input=False,
+        pushable=True,
+        goal_id=GOAL_BALL,
+        render_style="ball",
+    ),
 }
 
 GOAL_DEFS: Dict[int, GoalDef] = {
-    GOAL_RED: GoalDef(GOAL_RED, "红色目标", ACTOR_RED, (220, 74, 74), "square"),
-    GOAL_YELLOW: GoalDef(GOAL_YELLOW, "黄色目标", ACTOR_YELLOW, (236, 202, 70), "square"),
-    GOAL_BLUE: GoalDef(GOAL_BLUE, "蓝色目标", ACTOR_BLUE, (74, 136, 236), "square"),
-    GOAL_GREEN: GoalDef(GOAL_GREEN, "绿色目标", ACTOR_GREEN, (72, 190, 116), "square"),
-    GOAL_BALL: GoalDef(GOAL_BALL, "小球目标", ACTOR_BALL, (240, 240, 240), "circle"),
-}
-
-TERRAIN_RESOURCES = [
-    {"id": terrain_id, "name": TERRAIN_DEFS[terrain_id].name}
-    for terrain_id in sorted(TERRAIN_DEFS)
-]
-
-GOAL_RESOURCES = [
-    {"id": GOAL_EMPTY, "name": "无目标"},
-    *[
-        {"id": goal_id, "name": GOAL_DEFS[goal_id].name}
-        for goal_id in sorted(GOAL_DEFS)
-    ],
-]
-
-ACTOR_RESOURCES = [
-    {"id": ACTOR_EMPTY, "name": "无角色"},
-    *[
-        {"id": actor_id, "name": ACTOR_DEFS[actor_id].name}
-        for actor_id in sorted(ACTOR_DEFS)
-    ],
-]
-
-RESOURCE_GROUPS = {
-    "terrain": {"title": "选择地形", "items": TERRAIN_RESOURCES},
-    "goal": {"title": "选择目标位置", "items": GOAL_RESOURCES},
-    "actor": {"title": "选择角色", "items": ACTOR_RESOURCES},
-}
-
-BASE_BRUSH_BY_GROUP = {
-    "terrain": TERRAIN_FLOOR,
-    "goal": GOAL_EMPTY,
-    "actor": ACTOR_EMPTY,
+    GOAL_RED: GoalDef(
+        id=GOAL_RED,
+        name="红色目标",
+        actor_id=ACTOR_RED,
+        color=(220, 74, 74),
+        render_shape="square",
+    ),
+    GOAL_YELLOW: GoalDef(
+        id=GOAL_YELLOW,
+        name="黄色目标",
+        actor_id=ACTOR_YELLOW,
+        color=(236, 202, 70),
+        render_shape="square",
+    ),
+    GOAL_BLUE: GoalDef(
+        id=GOAL_BLUE,
+        name="蓝色目标",
+        actor_id=ACTOR_BLUE,
+        color=(74, 136, 236),
+        render_shape="square",
+    ),
+    GOAL_GREEN: GoalDef(
+        id=GOAL_GREEN,
+        name="绿色目标",
+        actor_id=ACTOR_GREEN,
+        color=(72, 190, 116),
+        render_shape="square",
+    ),
+    GOAL_BALL: GoalDef(
+        id=GOAL_BALL,
+        name="小球目标",
+        actor_id=ACTOR_BALL,
+        color=(240, 240, 240),
+        render_shape="circle",
+    ),
 }
 
 
 # =============================================================================
-# 元数据辅助函数
+# 元数据查询
 # =============================================================================
 
 def terrain_def(terrain_id: int) -> TerrainDef:
@@ -166,6 +236,10 @@ def actor_def(actor_id: int) -> Optional[ActorDef]:
 
 def goal_def(goal_id: int) -> Optional[GoalDef]:
     return GOAL_DEFS.get(goal_id)
+
+
+def terrain_name(terrain_id: int) -> str:
+    return terrain_def(terrain_id).name
 
 
 def actor_name(actor_id: int) -> str:
@@ -202,8 +276,59 @@ def actor_is_pushable(actor_id: int) -> bool:
     return bool(info and info.pushable)
 
 
+def terrain_is_walkable(terrain_id: int) -> bool:
+    return terrain_def(terrain_id).walkable
+
+
+def can_place_actor_on_terrain_id(terrain_id: int) -> bool:
+    return terrain_def(terrain_id).accepts_actor
+
+
+def can_place_goal_on_terrain_id(terrain_id: int) -> bool:
+    return terrain_def(terrain_id).accepts_goal
+
+
 # =============================================================================
-# 状态 / 规则
+# 编辑器资源配置
+# mapedit.py 只需要调用这些函数
+# =============================================================================
+
+def build_terrain_resources() -> List[dict]:
+    return [{"id": tid, "name": info.name} for tid, info in sorted(TERRAIN_DEFS.items(), key=lambda x: x[0])]
+
+
+def build_goal_resources() -> List[dict]:
+    return [{"id": GOAL_EMPTY, "name": "无目标"}] + [
+        {"id": gid, "name": info.name}
+        for gid, info in sorted(GOAL_DEFS.items(), key=lambda x: x[0])
+    ]
+
+
+def build_actor_resources() -> List[dict]:
+    return [{"id": ACTOR_EMPTY, "name": "无角色"}] + [
+        {"id": aid, "name": info.name}
+        for aid, info in sorted(ACTOR_DEFS.items(), key=lambda x: x[0])
+    ]
+
+
+def get_resource_groups() -> Dict[str, dict]:
+    return {
+        "terrain": {"title": "选择地形", "items": build_terrain_resources()},
+        "goal": {"title": "选择目标位置", "items": build_goal_resources()},
+        "actor": {"title": "选择角色", "items": build_actor_resources()},
+    }
+
+
+def get_base_brush_by_group() -> Dict[str, int]:
+    return {
+        "terrain": TERRAIN_FLOOR,
+        "goal": GOAL_EMPTY,
+        "actor": ACTOR_EMPTY,
+    }
+
+
+# =============================================================================
+# 规则层辅助
 # =============================================================================
 
 def actor_state_from_level(level) -> ActorState:
@@ -222,10 +347,29 @@ def is_inside(level, x: int, y: int) -> bool:
 
 
 def is_walkable_terrain(level, x: int, y: int) -> bool:
-    if not is_inside(level, x, y):
-        return False
-    return terrain_def(level.terrain[y][x]).walkable
+    return is_inside(level, x, y) and terrain_is_walkable(level.terrain[y][x])
 
+
+def can_place_actor(level, x: int, y: int) -> bool:
+    return is_inside(level, x, y) and can_place_actor_on_terrain_id(level.terrain[y][x])
+
+
+def can_place_goal(level, x: int, y: int) -> bool:
+    return is_inside(level, x, y) and can_place_goal_on_terrain_id(level.terrain[y][x])
+
+
+def level_from_actor_state(level, state: ActorState):
+    new_level = level.clone()
+    new_level.actors = [[ACTOR_EMPTY for _ in range(level.width)] for _ in range(level.height)]
+    for x, y, actor_id in state:
+        if is_inside(new_level, x, y):
+            new_level.actors[y][x] = actor_id
+    return new_level
+
+
+# =============================================================================
+# 胜利规则
+# =============================================================================
 
 def is_victory_state(level, state: ActorState) -> bool:
     actor_map = {(x, y): actor_id for x, y, actor_id in state}
@@ -252,18 +396,59 @@ def is_victory_state(level, state: ActorState) -> bool:
     return has_goal
 
 
-def _sorted_positions_for_move(state: ActorState, move_name: str) -> List[Tuple[int, int]]:
+# =============================================================================
+# 移动 / 推动规则
+# =============================================================================
+
+def _sorted_state_for_move(state: ActorState, move_name: str) -> List[Tuple[int, int, int]]:
     dx, dy = DIRS[move_name]
-    positions = [(x, y) for x, y, _ in state]
+    items = list(state)
+
     if dx > 0:
-        positions.sort(key=lambda p: (-p[0], p[1]))
+        items.sort(key=lambda item: (-item[0], item[1], item[2]))
     elif dx < 0:
-        positions.sort(key=lambda p: (p[0], p[1]))
+        items.sort(key=lambda item: (item[0], item[1], item[2]))
     elif dy > 0:
-        positions.sort(key=lambda p: (-p[1], p[0]))
+        items.sort(key=lambda item: (-item[1], item[0], item[2]))
     else:
-        positions.sort(key=lambda p: (p[1], p[0]))
-    return positions
+        items.sort(key=lambda item: (item[1], item[0], item[2]))
+
+    return items
+
+
+def _collect_push_chain(
+    level,
+    occupied: Dict[Tuple[int, int], int],
+    start_x: int,
+    start_y: int,
+    dx: int,
+    dy: int,
+) -> Optional[List[Tuple[int, int, int]]]:
+    """
+    从 front cell 开始收集一整条可被推动的链。
+    返回:
+    - None: 无法推动
+    - List[(x, y, actor_id)]: 可以推动的链
+    """
+    chain: List[Tuple[int, int, int]] = []
+    cx, cy = start_x, start_y
+
+    while True:
+        actor_id = occupied.get((cx, cy))
+        if actor_id is None:
+            break
+        if not actor_is_pushable(actor_id):
+            return None
+        chain.append((cx, cy, actor_id))
+        cx += dx
+        cy += dy
+
+    if not is_walkable_terrain(level, cx, cy):
+        return None
+    if (cx, cy) in occupied:
+        return None
+
+    return chain
 
 
 def move_actor_state(level, state: ActorState, move_name: str) -> ActorState:
@@ -273,9 +458,11 @@ def move_actor_state(level, state: ActorState, move_name: str) -> ActorState:
     dx, dy = DIRS[move_name]
     occupied: Dict[Tuple[int, int], int] = {(x, y): actor_id for x, y, actor_id in state}
 
-    for x, y in _sorted_positions_for_move(state, move_name):
-        actor_id = occupied.get((x, y))
-        if actor_id is None:
+    for x, y, actor_id in _sorted_state_for_move(state, move_name):
+        current_actor = occupied.get((x, y))
+        if current_actor is None:
+            continue
+        if current_actor != actor_id:
             continue
         if not actor_responds_to_input(actor_id):
             continue
@@ -284,37 +471,18 @@ def move_actor_state(level, state: ActorState, move_name: str) -> ActorState:
         if not is_walkable_terrain(level, nx, ny):
             continue
 
-        front_cell = occupied.get((nx, ny))
-        if front_cell is None:
+        blocker = occupied.get((nx, ny))
+        if blocker is None:
             occupied[(nx, ny)] = actor_id
             del occupied[(x, y)]
             continue
 
-        if not actor_is_pushable(front_cell):
+        chain = _collect_push_chain(level, occupied, nx, ny, dx, dy)
+        if chain is None:
             continue
 
-        push_chain: List[Tuple[int, int, int]] = []
-        cx, cy = nx, ny
-        while True:
-            blocking_actor = occupied.get((cx, cy))
-            if blocking_actor is None:
-                break
-            if not actor_is_pushable(blocking_actor):
-                push_chain = []
-                break
-            push_chain.append((cx, cy, blocking_actor))
-            cx += dx
-            cy += dy
-
-        if not push_chain:
-            continue
-        if not is_walkable_terrain(level, cx, cy):
-            continue
-        if (cx, cy) in occupied:
-            continue
-
-        for bx, by, ball_id in reversed(push_chain):
-            occupied[(bx + dx, by + dy)] = ball_id
+        for bx, by, bid in reversed(chain):
+            occupied[(bx + dx, by + dy)] = bid
             del occupied[(bx, by)]
 
         occupied[(nx, ny)] = actor_id
@@ -325,32 +493,9 @@ def move_actor_state(level, state: ActorState, move_name: str) -> ActorState:
     return tuple(result)
 
 
-def level_from_actor_state(level, state: ActorState):
-    new_level = level.clone()
-    new_level.actors = [[ACTOR_EMPTY for _ in range(level.width)] for _ in range(level.height)]
-    for x, y, actor_id in state:
-        if is_inside(new_level, x, y):
-            new_level.actors[y][x] = actor_id
-    return new_level
-
-
 def move_level(level, move_name: str):
-    state = actor_state_from_level(level)
-    new_state = move_actor_state(level, state, move_name)
-    return level_from_actor_state(level, new_state)
+    return level_from_actor_state(level, move_actor_state(level, actor_state_from_level(level), move_name))
 
 
 def is_victory(level) -> bool:
     return is_victory_state(level, actor_state_from_level(level))
-
-
-# =============================================================================
-# 编辑器 / UI 可用的统一入口
-# =============================================================================
-
-def get_resource_groups():
-    return RESOURCE_GROUPS
-
-
-def get_base_brush_by_group():
-    return BASE_BRUSH_BY_GROUP.copy()
