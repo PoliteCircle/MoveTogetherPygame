@@ -90,6 +90,36 @@ def _draw_shock_terrain(surface: pygame.Surface, rect: pygame.Rect) -> None:
     pygame.draw.polygon(surface, (255, 226, 92), [(int(x), int(y)) for x, y in points])
 
 
+
+
+def _draw_snow_terrain(surface: pygame.Surface, rect: pygame.Rect) -> None:
+    pygame.draw.rect(surface, (210, 226, 240), rect)
+    pygame.draw.rect(surface, (248, 252, 255), rect, 2)
+
+    # 使用很轻的雪纹来提示：该地形会启用“联通边界”。
+    inner = rect.inflate(-8, -8)
+    if inner.width <= 0 or inner.height <= 0:
+        return
+
+    pygame.draw.line(surface, (245, 250, 255), (inner.left, inner.centery), (inner.right, inner.centery), 2)
+    pygame.draw.line(surface, (245, 250, 255), (inner.centerx, inner.top), (inner.centerx, inner.bottom), 2)
+    pygame.draw.line(surface, (232, 242, 252), (inner.left + 4, inner.top + 4), (inner.right - 4, inner.bottom - 4), 2)
+    pygame.draw.line(surface, (232, 242, 252), (inner.right - 4, inner.top + 4), (inner.left + 4, inner.bottom - 4), 2)
+
+
+def _draw_ice_terrain(surface: pygame.Surface, rect: pygame.Rect) -> None:
+    pygame.draw.rect(surface, (145, 206, 236), rect)
+    pygame.draw.rect(surface, (224, 248, 255), rect, 2)
+
+    inner = rect.inflate(-8, -8)
+    if inner.width <= 0 or inner.height <= 0:
+        return
+
+    pygame.draw.rect(surface, (176, 226, 247), inner, border_radius=6)
+    pygame.draw.line(surface, (235, 250, 255), (inner.left + 6, inner.top + 8), (inner.right - 6, inner.top + 8), 2)
+    pygame.draw.line(surface, (235, 250, 255), (inner.left + 10, inner.centery), (inner.right - 8, inner.centery - 4), 2)
+    pygame.draw.line(surface, (235, 250, 255), (inner.left + 8, inner.bottom - 10), (inner.right - 10, inner.bottom - 14), 2)
+
 def draw_terrain(surface: pygame.Surface, rect: pygame.Rect, terrain_id: int) -> None:
     info = terrain_def(terrain_id)
     pygame.draw.rect(surface, info.base_color, rect)
@@ -120,6 +150,12 @@ def draw_terrain(surface: pygame.Surface, rect: pygame.Rect, terrain_id: int) ->
 
     elif info.render_style == "shock":
         _draw_shock_terrain(surface, rect)
+
+    elif info.render_style == "snow":
+        _draw_snow_terrain(surface, rect)
+
+    elif info.render_style == "ice":
+        _draw_ice_terrain(surface, rect)
 
     else:
         pygame.draw.rect(surface, info.base_color, rect)

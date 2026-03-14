@@ -9,6 +9,11 @@ game_rules.py
 3. 地图可放置规则；
 4. 角色移动、推动、胜利判定等核心规则。
 
+本版本新增：
+- 电击区：角色刚进入后，下一次输入会跳过行动（stun_turns=1）。
+- 雪地：普通可行走地形，但只要地图中存在雪地或冰面，边界就会首尾相连。
+- 冰面：角色/被推动物体如果在本次输入中落到冰面，会沿当前方向继续滑行，直到离开冰面或无法继续。
+
 设计目标：
 - 以后新增普通角色 / 目标 / 地形时，优先只改这里；
 - main.py / mapedit.py / core.py 不再维护自己的资源表；
@@ -26,6 +31,8 @@ TERRAIN_VOID = 0
 TERRAIN_FLOOR = 1
 TERRAIN_STONE = 2
 TERRAIN_SHOCK = 3
+TERRAIN_SNOW = 4
+TERRAIN_ICE = 5
 
 ACTOR_EMPTY = 0
 ACTOR_RED = 1
@@ -104,7 +111,6 @@ class GoalDef:
 
 # =============================================================================
 # 可扩展注册表
-# 以后新增普通对象，主要改这里
 # =============================================================================
 
 TERRAIN_DEFS: Dict[int, TerrainDef] = {
@@ -143,6 +149,24 @@ TERRAIN_DEFS: Dict[int, TerrainDef] = {
         accepts_goal=True,
         base_color=(92, 72, 24),
         render_style="shock",
+    ),
+    TERRAIN_SNOW: TerrainDef(
+        id=TERRAIN_SNOW,
+        name="雪地",
+        walkable=True,
+        accepts_actor=True,
+        accepts_goal=True,
+        base_color=(210, 226, 240),
+        render_style="snow",
+    ),
+    TERRAIN_ICE: TerrainDef(
+        id=TERRAIN_ICE,
+        name="冰面",
+        walkable=True,
+        accepts_actor=True,
+        accepts_goal=True,
+        base_color=(145, 206, 236),
+        render_style="ice",
     ),
 }
 
@@ -295,6 +319,18 @@ def terrain_is_shock(terrain_id: int) -> bool:
     return terrain_id == TERRAIN_SHOCK
 
 
+def terrain_is_snow(terrain_id: int) -> bool:
+    return terrain_id == TERRAIN_SNOW
+
+
+def terrain_is_ice(terrain_id: int) -> bool:
+    return terrain_id == TERRAIN_ICE
+
+
+def terrain_enables_wrapping(terrain_id: int) -> bool:
+    return terrain_id in (TERRAIN_SNOW, TERRAIN_ICE)
+
+
 def can_place_actor_on_terrain_id(terrain_id: int) -> bool:
     return terrain_def(terrain_id).accepts_actor
 
@@ -305,7 +341,6 @@ def can_place_goal_on_terrain_id(terrain_id: int) -> bool:
 
 # =============================================================================
 # 编辑器资源配置
-# mapedit.py 只需要调用这些函数
 # =============================================================================
 
 def build_terrain_resources() -> List[dict]:
@@ -382,12 +417,50 @@ def is_inside(level, x: int, y: int) -> bool:
     return 0 <= x < level.width and 0 <= y < level.height
 
 
+def level_has_wrapping_edges(level) -> bool:
+    """
+    只要整张地图中存在“雪地”或“冰面”，就启用首尾相连的联通边界。
+    由于关卡地形在求解过程中不会变化，这里做一个轻量缓存，避免 BFS 时重复扫描整张图。
+    """
+    cached = getattr(level, "_has_wrapping_edges_cache", None)
+    if cached is not None:
+        return bool(cached)
+
+    has_wrap = any(terrain_enables_wrapping(tid) for row in level.terrain for tid in row)
+    setattr(level, "_has_wrapping_edges_cache", has_wrap)
+    return has_wrap
+
+
+def _step_forward(level, x: int, y: int, dx: int, dy: int, wrap_enabled: bool) -> Optional[Tuple[int, int]]:
+    """
+    计算从 (x, y) 朝 (dx, dy) 迈出一步后的坐标。
+
+    - 普通地图：走出边界会返回 None，表示该方向不可前进。
+    - 联通边界地图：走出边界会从对侧重新出现。
+    """
+    nx = x + dx
+    ny = y + dy
+
+    if wrap_enabled:
+        if level.width <= 0 or level.height <= 0:
+            return None
+        return nx % level.width, ny % level.height
+
+    if not is_inside(level, nx, ny):
+        return None
+    return nx, ny
+
+
 def is_walkable_terrain(level, x: int, y: int) -> bool:
     return is_inside(level, x, y) and terrain_is_walkable(level.terrain[y][x])
 
 
 def is_shock_terrain(level, x: int, y: int) -> bool:
     return is_inside(level, x, y) and terrain_is_shock(level.terrain[y][x])
+
+
+def is_ice_terrain(level, x: int, y: int) -> bool:
+    return is_inside(level, x, y) and terrain_is_ice(level.terrain[y][x])
 
 
 def can_place_actor(level, x: int, y: int) -> bool:
@@ -460,99 +533,239 @@ def _sorted_state_for_move(state: ActorState, move_name: str) -> List[ActorItem]
     return items
 
 
+def _sorted_entity_ids_for_move(
+    entity_ids: Set[int],
+    entities: Dict[int, Dict[str, int]],
+    move_name: str,
+) -> List[int]:
+    dx, dy = DIRS[move_name]
+    ids = list(entity_ids)
+
+    if dx > 0:
+        ids.sort(key=lambda eid: (-entities[eid]["x"], entities[eid]["y"], entities[eid]["actor_id"], eid))
+    elif dx < 0:
+        ids.sort(key=lambda eid: (entities[eid]["x"], entities[eid]["y"], entities[eid]["actor_id"], eid))
+    elif dy > 0:
+        ids.sort(key=lambda eid: (-entities[eid]["y"], entities[eid]["x"], entities[eid]["actor_id"], eid))
+    else:
+        ids.sort(key=lambda eid: (entities[eid]["y"], entities[eid]["x"], entities[eid]["actor_id"], eid))
+
+    return ids
+
+
 def _collect_push_chain(
     level,
-    occupied: Dict[Tuple[int, int], Tuple[int, int]],
+    occupied: Dict[Tuple[int, int], int],
+    entities: Dict[int, Dict[str, int]],
     start_x: int,
     start_y: int,
     dx: int,
     dy: int,
-) -> Optional[List[ActorItem]]:
+    wrap_enabled: bool,
+) -> Optional[List[int]]:
     """
     从 front cell 开始收集一整条可被推动的链。
-    返回:
-    - None: 无法推动
-    - List[(x, y, actor_id, stun_turns)]: 可以推动的链
+
+    返回：
+    - None：无法推动。
+    - List[int]：需要被整体向前推一格的 entity_id 链。
+
+    在联通边界地图里，这里会额外做“环检测”：
+    如果一整圈都被物体占满而找不到空位，就不能推动，避免无限循环。
     """
-    chain: List[ActorItem] = []
+    chain: List[int] = []
+    visited_positions: Set[Tuple[int, int]] = set()
     cx, cy = start_x, start_y
 
     while True:
-        item = occupied.get((cx, cy))
-        if item is None:
-            break
-        actor_id, stun_turns = item
+        if (cx, cy) in visited_positions:
+            return None
+        visited_positions.add((cx, cy))
+
+        eid = occupied.get((cx, cy))
+        if eid is None:
+            if not is_walkable_terrain(level, cx, cy):
+                return None
+            return chain
+
+        actor_id = entities[eid]["actor_id"]
         if not actor_is_pushable(actor_id):
             return None
-        chain.append((cx, cy, actor_id, stun_turns))
-        cx += dx
-        cy += dy
+        chain.append(eid)
 
-    if not is_walkable_terrain(level, cx, cy):
-        return None
-    if (cx, cy) in occupied:
+        next_pos = _step_forward(level, cx, cy, dx, dy, wrap_enabled)
+        if next_pos is None:
+            return None
+        cx, cy = next_pos
+
+
+def _move_entity_to(
+    occupied: Dict[Tuple[int, int], int],
+    entities: Dict[int, Dict[str, int]],
+    entity_id: int,
+    new_x: int,
+    new_y: int,
+) -> None:
+    old_x = entities[entity_id]["x"]
+    old_y = entities[entity_id]["y"]
+    occupied.pop((old_x, old_y), None)
+    entities[entity_id]["x"] = new_x
+    entities[entity_id]["y"] = new_y
+    occupied[(new_x, new_y)] = entity_id
+
+
+def _attempt_single_step(
+    level,
+    occupied: Dict[Tuple[int, int], int],
+    entities: Dict[int, Dict[str, int]],
+    entity_id: int,
+    dx: int,
+    dy: int,
+    wrap_enabled: bool,
+) -> Optional[List[int]]:
+    """
+    让某个实体尝试向当前方向移动一小步（必要时带着整条可推动链一起动）。
+
+    返回：
+    - None：这一步完全走不动。
+    - List[int]：本次真实发生位移的所有 entity_id（包含主动移动者和被推动者）。
+    """
+    x = entities[entity_id]["x"]
+    y = entities[entity_id]["y"]
+
+    next_pos = _step_forward(level, x, y, dx, dy, wrap_enabled)
+    if next_pos is None:
         return None
 
-    return chain
+    nx, ny = next_pos
+    if not is_walkable_terrain(level, nx, ny):
+        return None
+
+    blocker_id = occupied.get((nx, ny))
+    moved_ids: List[int] = []
+
+    if blocker_id is not None:
+        chain = _collect_push_chain(level, occupied, entities, nx, ny, dx, dy, wrap_enabled)
+        if chain is None:
+            return None
+
+        for pushed_id in reversed(chain):
+            px = entities[pushed_id]["x"]
+            py = entities[pushed_id]["y"]
+            pushed_next = _step_forward(level, px, py, dx, dy, wrap_enabled)
+            if pushed_next is None:
+                return None
+            pnx, pny = pushed_next
+            _move_entity_to(occupied, entities, pushed_id, pnx, pny)
+            moved_ids.append(pushed_id)
+
+    _move_entity_to(occupied, entities, entity_id, nx, ny)
+    moved_ids.append(entity_id)
+    return moved_ids
 
 
 def move_actor_state(level, state: ActorState, move_name: str) -> ActorState:
+    """
+    单次输入的完整状态转移。
+
+    本函数同时处理：
+    1. 正常移动 / 推动；
+    2. 电击区导致的“下一回合跳过”；
+    3. 雪地/冰面触发的全图联通边界；
+    4. 冰面上的持续滑行。
+
+    关键实现思路：
+    - 先把状态转换成带 entity_id 的内部结构，方便跟踪“同一个物体”在同一回合内多次滑行；
+    - 初始 active 集合只放“会响应输入”的角色；
+    - 如果某个实体在本回合落到了冰面，就把它加入下一轮 active，继续沿原方向滑；
+    - 被推动的小球如果被推到冰面，也会继续滑；
+    - 如果某个实体在冰面环上反复回到同一冰格，则停止继续滑，避免无限循环。
+    """
     if move_name not in DIRS:
         return tuple(_coerce_state_item(item) for item in state)
 
     dx, dy = DIRS[move_name]
-    occupied: Dict[Tuple[int, int], Tuple[int, int]] = {
-        (x, y): (actor_id, stun_turns)
-        for x, y, actor_id, stun_turns in (_coerce_state_item(item) for item in state)
+    wrap_enabled = level_has_wrapping_edges(level)
+
+    # entity_id -> {x, y, actor_id, stun_turns}
+    entities: Dict[int, Dict[str, int]] = {}
+    occupied: Dict[Tuple[int, int], int] = {}
+    for entity_id, raw_item in enumerate(_coerce_state_item(item) for item in state):
+        x, y, actor_id, stun_turns = raw_item
+        entities[entity_id] = {
+            "x": x,
+            "y": y,
+            "actor_id": actor_id,
+            "stun_turns": stun_turns,
+        }
+        occupied[(x, y)] = entity_id
+
+    # 第一轮只有“会响应输入”的角色会尝试行动。
+    active_ids: Set[int] = {
+        entity_id
+        for entity_id, info in entities.items()
+        if actor_responds_to_input(info["actor_id"])
     }
-    moved_positions: Set[Tuple[int, int]] = set()
 
-    for x, y, actor_id, _ in _sorted_state_for_move(state, move_name):
-        current_item = occupied.get((x, y))
-        if current_item is None:
-            continue
+    # 记录本回合哪些实体进入过电击区；回合结算时给它们挂 1 层麻痹。
+    entered_shock_ids: Set[int] = set()
 
-        current_actor, current_stun_turns = current_item
-        if current_actor != actor_id:
-            continue
+    # 记录每个实体在本回合滑冰时已经到过哪些冰格，用来防止环形冰道无限滑动。
+    ice_visited: Dict[int, Set[Tuple[int, int]]] = {entity_id: set() for entity_id in entities}
 
-        if current_stun_turns > 0:
-            occupied[(x, y)] = (current_actor, current_stun_turns - 1)
-            continue
+    while active_ids:
+        next_active_ids: Set[int] = set()
 
-        if not actor_responds_to_input(current_actor):
-            continue
+        for entity_id in _sorted_entity_ids_for_move(active_ids, entities, move_name):
+            info = entities.get(entity_id)
+            if info is None:
+                continue
 
-        nx, ny = x + dx, y + dy
-        if not is_walkable_terrain(level, nx, ny):
-            continue
+            current_stun_turns = info["stun_turns"]
+            if current_stun_turns > 0:
+                # 电击效果：下一次输入直接跳过行动，然后层数减 1。
+                info["stun_turns"] = current_stun_turns - 1
+                continue
 
-        blocker = occupied.get((nx, ny))
-        if blocker is None:
-            occupied[(nx, ny)] = (current_actor, current_stun_turns)
-            del occupied[(x, y)]
-            moved_positions.add((nx, ny))
-            continue
+            moved_ids = _attempt_single_step(
+                level=level,
+                occupied=occupied,
+                entities=entities,
+                entity_id=entity_id,
+                dx=dx,
+                dy=dy,
+                wrap_enabled=wrap_enabled,
+            )
+            if not moved_ids:
+                continue
 
-        chain = _collect_push_chain(level, occupied, nx, ny, dx, dy)
-        if chain is None:
-            continue
+            for moved_id in moved_ids:
+                mx = entities[moved_id]["x"]
+                my = entities[moved_id]["y"]
 
-        for bx, by, bid, bstun in reversed(chain):
-            occupied[(bx + dx, by + dy)] = (bid, bstun)
-            del occupied[(bx, by)]
-            moved_positions.add((bx + dx, by + dy))
+                if is_shock_terrain(level, mx, my):
+                    entered_shock_ids.add(moved_id)
 
-        occupied[(nx, ny)] = (current_actor, current_stun_turns)
-        del occupied[(x, y)]
-        moved_positions.add((nx, ny))
+                if is_ice_terrain(level, mx, my):
+                    # 本回合落在冰面上的实体，下一个微步会继续沿同方向滑动。
+                    # 若回到已经到过的冰格，说明出现了环，不再继续滑。
+                    if (mx, my) not in ice_visited[moved_id]:
+                        ice_visited[moved_id].add((mx, my))
+                        next_active_ids.add(moved_id)
+
+        active_ids = next_active_ids
+
+    for entity_id in entered_shock_ids:
+        entities[entity_id]["stun_turns"] = max(entities[entity_id]["stun_turns"], 1)
 
     result: List[ActorItem] = []
-    for (x, y), (actor_id, stun_turns) in occupied.items():
-        final_stun_turns = stun_turns
-        if (x, y) in moved_positions and is_shock_terrain(level, x, y):
-            final_stun_turns = max(final_stun_turns, 1)
-        result.append((x, y, actor_id, final_stun_turns))
+    for info in entities.values():
+        result.append((
+            info["x"],
+            info["y"],
+            info["actor_id"],
+            max(0, info["stun_turns"]),
+        ))
 
     _sort_actor_items(result)
     return tuple(result)
