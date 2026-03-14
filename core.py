@@ -37,6 +37,7 @@ class LevelData:
     terrain: List[List[int]]
     actors: List[List[int]]
     goals: List[List[int]]
+    actor_status: List[List[int]]
     victory_mode: str = DEFAULT_VICTORY_MODE
 
     def clone(self) -> "LevelData":
@@ -47,6 +48,7 @@ class LevelData:
             terrain=[row[:] for row in self.terrain],
             actors=[row[:] for row in self.actors],
             goals=[row[:] for row in self.goals],
+            actor_status=[row[:] for row in self.actor_status],
             victory_mode=self.victory_mode,
         )
 
@@ -71,6 +73,7 @@ def create_empty_level(width: int, height: int, name: str = "新关卡") -> Leve
     terrain = [[TERRAIN_FLOOR for _ in range(width)] for _ in range(height)]
     actors = [[ACTOR_EMPTY for _ in range(width)] for _ in range(height)]
     goals = [[GOAL_EMPTY for _ in range(width)] for _ in range(height)]
+    actor_status = [[0 for _ in range(width)] for _ in range(height)]
     return LevelData(
         name=name,
         width=width,
@@ -78,6 +81,7 @@ def create_empty_level(width: int, height: int, name: str = "新关卡") -> Leve
         terrain=terrain,
         actors=actors,
         goals=goals,
+        actor_status=actor_status,
     )
 
 
@@ -89,8 +93,21 @@ def level_to_dict(level: LevelData) -> dict:
         "terrain": level.terrain,
         "actors": level.actors,
         "goals": level.goals,
+        "actor_status": level.actor_status,
         "victory_mode": level.victory_mode,
     }
+
+
+def _validate_layer(data: dict, layer_name: str, width: int, height: int) -> None:
+    layer = data[layer_name]
+    if not isinstance(layer, list) or len(layer) != height:
+        raise ValueError(f"{layer_name} 的行数必须等于 height")
+    for row in layer:
+        if not isinstance(row, list) or len(row) != width:
+            raise ValueError(f"{layer_name} 的每一行长度必须等于 width")
+        for item in row:
+            if not isinstance(item, int):
+                raise ValueError(f"{layer_name} 中必须全为整数")
 
 
 def validate_level_dict(data: dict) -> None:
@@ -105,28 +122,31 @@ def validate_level_dict(data: dict) -> None:
         raise ValueError("width 和 height 必须是正整数")
 
     for layer_name in ("terrain", "actors", "goals"):
-        layer = data[layer_name]
-        if not isinstance(layer, list) or len(layer) != height:
-            raise ValueError(f"{layer_name} 的行数必须等于 height")
-        for row in layer:
-            if not isinstance(row, list) or len(row) != width:
-                raise ValueError(f"{layer_name} 的每一行长度必须等于 width")
-            for item in row:
-                if not isinstance(item, int):
-                    raise ValueError(f"{layer_name} 中必须全为整数")
+        _validate_layer(data, layer_name, width, height)
+
+    if "actor_status" in data:
+        _validate_layer(data, "actor_status", width, height)
 
 
 def load_level(path: str | Path) -> LevelData:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     validate_level_dict(data)
+
+    width = data["width"]
+    height = data["height"]
+    actor_status = data.get("actor_status")
+    if actor_status is None:
+        actor_status = [[0 for _ in range(width)] for _ in range(height)]
+
     return LevelData(
         name=data["name"],
-        width=data["width"],
-        height=data["height"],
+        width=width,
+        height=height,
         terrain=data["terrain"],
         actors=data["actors"],
         goals=data["goals"],
+        actor_status=actor_status,
         victory_mode=data.get("victory_mode", DEFAULT_VICTORY_MODE),
     )
 

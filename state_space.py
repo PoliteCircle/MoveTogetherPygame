@@ -62,6 +62,9 @@ def level_from_dict(data: dict) -> LevelData:
     level.terrain = [list(row) for row in data["terrain"]]
     level.actors = [list(row) for row in data["actors"]]
     level.goals = [list(row) for row in data["goals"]]
+    actor_status = data.get("actor_status")
+    if actor_status is not None:
+        level.actor_status = [list(row) for row in actor_status]
 
     if "victory_mode" in data:
         level.victory_mode = data["victory_mode"]
@@ -72,13 +75,16 @@ def level_from_dict(data: dict) -> LevelData:
 def build_level_from_state(static_level: LevelData, state_items: List[dict]) -> LevelData:
     level = static_level.clone()
     level.actors = [[0 for _ in range(level.width)] for _ in range(level.height)]
+    level.actor_status = [[0 for _ in range(level.width)] for _ in range(level.height)]
 
     for item in state_items:
         x = int(item["x"])
         y = int(item["y"])
         actor_id = int(item["actor_id"])
+        stun_turns = int(item.get("stun_turns", 0))
         if 0 <= x < level.width and 0 <= y < level.height:
             level.actors[y][x] = actor_id
+            level.actor_status[y][x] = stun_turns
 
     return level
 
@@ -325,6 +331,7 @@ def _is_goal_state(static_level: LevelData, state_items: List[dict]) -> bool:
                 int(item["x"]),
                 int(item["y"]),
                 int(item["actor_id"]),
+                int(item.get("stun_turns", 0)),
             )
             for item in state_items
         )

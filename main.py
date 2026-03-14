@@ -308,7 +308,7 @@ def run_level(level_path: Path) -> None:
                 if event.key in key_to_move and not won:
                     move_name = key_to_move[event.key]
                     new_level = move_level(level, move_name)
-                    if new_level.actors != level.actors:
+                    if new_level.actors != level.actors or new_level.actor_status != level.actor_status:
                         level = new_level
                         won = is_victory(level)
 

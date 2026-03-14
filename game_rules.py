@@ -16,7 +16,7 @@ game_rules.py
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 # =============================================================================
 # 基础常量
@@ -25,6 +25,7 @@ from typing import Dict, List, Optional, Tuple
 TERRAIN_VOID = 0
 TERRAIN_FLOOR = 1
 TERRAIN_STONE = 2
+TERRAIN_SHOCK = 3
 
 ACTOR_EMPTY = 0
 ACTOR_RED = 1
@@ -61,8 +62,9 @@ CHAR_TO_MOVE = {v: k for k, v in MOVE_TO_CHAR.items()}
 
 DEFAULT_VICTORY_MODE = "all_matching_goals"
 
-# ActorState: (x, y, actor_id)
-ActorState = Tuple[Tuple[int, int, int], ...]
+# ActorState item: (x, y, actor_id, stun_turns)
+ActorItem = Tuple[int, int, int, int]
+ActorState = Tuple[ActorItem, ...]
 
 
 # =============================================================================
@@ -132,6 +134,15 @@ TERRAIN_DEFS: Dict[int, TerrainDef] = {
         accepts_goal=False,
         base_color=(110, 110, 116),
         render_style="stone",
+    ),
+    TERRAIN_SHOCK: TerrainDef(
+        id=TERRAIN_SHOCK,
+        name="电击区",
+        walkable=True,
+        accepts_actor=True,
+        accepts_goal=True,
+        base_color=(92, 72, 24),
+        render_style="shock",
     ),
 }
 
@@ -280,6 +291,10 @@ def terrain_is_walkable(terrain_id: int) -> bool:
     return terrain_def(terrain_id).walkable
 
 
+def terrain_is_shock(terrain_id: int) -> bool:
+    return terrain_id == TERRAIN_SHOCK
+
+
 def can_place_actor_on_terrain_id(terrain_id: int) -> bool:
     return terrain_def(terrain_id).accepts_actor
 
@@ -331,14 +346,35 @@ def get_base_brush_by_group() -> Dict[str, int]:
 # 规则层辅助
 # =============================================================================
 
+def _coerce_state_item(item: Tuple[int, ...]) -> ActorItem:
+    if len(item) == 4:
+        x, y, actor_id, stun_turns = item
+        return int(x), int(y), int(actor_id), max(0, int(stun_turns))
+    if len(item) == 3:
+        x, y, actor_id = item
+        return int(x), int(y), int(actor_id), 0
+    raise ValueError(f"非法状态项: {item!r}")
+
+
+def _sort_actor_items(items: List[ActorItem]) -> None:
+    items.sort(key=lambda item: (item[1], item[0], item[2], item[3]))
+
+
 def actor_state_from_level(level) -> ActorState:
-    result: List[Tuple[int, int, int]] = []
+    result: List[ActorItem] = []
+    actor_status = getattr(level, "actor_status", None)
+
     for y in range(level.height):
         for x in range(level.width):
             actor_id = level.actors[y][x]
-            if actor_id != ACTOR_EMPTY:
-                result.append((x, y, actor_id))
-    result.sort(key=lambda item: (item[1], item[0], item[2]))
+            if actor_id == ACTOR_EMPTY:
+                continue
+            stun_turns = 0
+            if actor_status is not None and 0 <= y < len(actor_status) and 0 <= x < len(actor_status[y]):
+                stun_turns = max(0, int(actor_status[y][x]))
+            result.append((x, y, actor_id, stun_turns))
+
+    _sort_actor_items(result)
     return tuple(result)
 
 
@@ -348,6 +384,10 @@ def is_inside(level, x: int, y: int) -> bool:
 
 def is_walkable_terrain(level, x: int, y: int) -> bool:
     return is_inside(level, x, y) and terrain_is_walkable(level.terrain[y][x])
+
+
+def is_shock_terrain(level, x: int, y: int) -> bool:
+    return is_inside(level, x, y) and terrain_is_shock(level.terrain[y][x])
 
 
 def can_place_actor(level, x: int, y: int) -> bool:
@@ -361,9 +401,13 @@ def can_place_goal(level, x: int, y: int) -> bool:
 def level_from_actor_state(level, state: ActorState):
     new_level = level.clone()
     new_level.actors = [[ACTOR_EMPTY for _ in range(level.width)] for _ in range(level.height)]
-    for x, y, actor_id in state:
+    new_level.actor_status = [[0 for _ in range(level.width)] for _ in range(level.height)]
+
+    for raw_item in state:
+        x, y, actor_id, stun_turns = _coerce_state_item(raw_item)
         if is_inside(new_level, x, y):
             new_level.actors[y][x] = actor_id
+            new_level.actor_status[y][x] = max(0, int(stun_turns))
     return new_level
 
 
@@ -372,7 +416,7 @@ def level_from_actor_state(level, state: ActorState):
 # =============================================================================
 
 def is_victory_state(level, state: ActorState) -> bool:
-    actor_map = {(x, y): actor_id for x, y, actor_id in state}
+    actor_map = {(x, y): actor_id for x, y, actor_id, _ in (_coerce_state_item(item) for item in state)}
 
     if level.victory_mode == "any":
         for y in range(level.height):
@@ -400,46 +444,47 @@ def is_victory_state(level, state: ActorState) -> bool:
 # 移动 / 推动规则
 # =============================================================================
 
-def _sorted_state_for_move(state: ActorState, move_name: str) -> List[Tuple[int, int, int]]:
+def _sorted_state_for_move(state: ActorState, move_name: str) -> List[ActorItem]:
     dx, dy = DIRS[move_name]
-    items = list(state)
+    items = [_coerce_state_item(item) for item in state]
 
     if dx > 0:
-        items.sort(key=lambda item: (-item[0], item[1], item[2]))
+        items.sort(key=lambda item: (-item[0], item[1], item[2], item[3]))
     elif dx < 0:
-        items.sort(key=lambda item: (item[0], item[1], item[2]))
+        items.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
     elif dy > 0:
-        items.sort(key=lambda item: (-item[1], item[0], item[2]))
+        items.sort(key=lambda item: (-item[1], item[0], item[2], item[3]))
     else:
-        items.sort(key=lambda item: (item[1], item[0], item[2]))
+        items.sort(key=lambda item: (item[1], item[0], item[2], item[3]))
 
     return items
 
 
 def _collect_push_chain(
     level,
-    occupied: Dict[Tuple[int, int], int],
+    occupied: Dict[Tuple[int, int], Tuple[int, int]],
     start_x: int,
     start_y: int,
     dx: int,
     dy: int,
-) -> Optional[List[Tuple[int, int, int]]]:
+) -> Optional[List[ActorItem]]:
     """
     从 front cell 开始收集一整条可被推动的链。
     返回:
     - None: 无法推动
-    - List[(x, y, actor_id)]: 可以推动的链
+    - List[(x, y, actor_id, stun_turns)]: 可以推动的链
     """
-    chain: List[Tuple[int, int, int]] = []
+    chain: List[ActorItem] = []
     cx, cy = start_x, start_y
 
     while True:
-        actor_id = occupied.get((cx, cy))
-        if actor_id is None:
+        item = occupied.get((cx, cy))
+        if item is None:
             break
+        actor_id, stun_turns = item
         if not actor_is_pushable(actor_id):
             return None
-        chain.append((cx, cy, actor_id))
+        chain.append((cx, cy, actor_id, stun_turns))
         cx += dx
         cy += dy
 
@@ -453,18 +498,29 @@ def _collect_push_chain(
 
 def move_actor_state(level, state: ActorState, move_name: str) -> ActorState:
     if move_name not in DIRS:
-        return state
+        return tuple(_coerce_state_item(item) for item in state)
 
     dx, dy = DIRS[move_name]
-    occupied: Dict[Tuple[int, int], int] = {(x, y): actor_id for x, y, actor_id in state}
+    occupied: Dict[Tuple[int, int], Tuple[int, int]] = {
+        (x, y): (actor_id, stun_turns)
+        for x, y, actor_id, stun_turns in (_coerce_state_item(item) for item in state)
+    }
+    moved_positions: Set[Tuple[int, int]] = set()
 
-    for x, y, actor_id in _sorted_state_for_move(state, move_name):
-        current_actor = occupied.get((x, y))
-        if current_actor is None:
+    for x, y, actor_id, _ in _sorted_state_for_move(state, move_name):
+        current_item = occupied.get((x, y))
+        if current_item is None:
             continue
+
+        current_actor, current_stun_turns = current_item
         if current_actor != actor_id:
             continue
-        if not actor_responds_to_input(actor_id):
+
+        if current_stun_turns > 0:
+            occupied[(x, y)] = (current_actor, current_stun_turns - 1)
+            continue
+
+        if not actor_responds_to_input(current_actor):
             continue
 
         nx, ny = x + dx, y + dy
@@ -473,23 +529,32 @@ def move_actor_state(level, state: ActorState, move_name: str) -> ActorState:
 
         blocker = occupied.get((nx, ny))
         if blocker is None:
-            occupied[(nx, ny)] = actor_id
+            occupied[(nx, ny)] = (current_actor, current_stun_turns)
             del occupied[(x, y)]
+            moved_positions.add((nx, ny))
             continue
 
         chain = _collect_push_chain(level, occupied, nx, ny, dx, dy)
         if chain is None:
             continue
 
-        for bx, by, bid in reversed(chain):
-            occupied[(bx + dx, by + dy)] = bid
+        for bx, by, bid, bstun in reversed(chain):
+            occupied[(bx + dx, by + dy)] = (bid, bstun)
             del occupied[(bx, by)]
+            moved_positions.add((bx + dx, by + dy))
 
-        occupied[(nx, ny)] = actor_id
+        occupied[(nx, ny)] = (current_actor, current_stun_turns)
         del occupied[(x, y)]
+        moved_positions.add((nx, ny))
 
-    result = [(x, y, actor_id) for (x, y), actor_id in occupied.items()]
-    result.sort(key=lambda item: (item[1], item[0], item[2]))
+    result: List[ActorItem] = []
+    for (x, y), (actor_id, stun_turns) in occupied.items():
+        final_stun_turns = stun_turns
+        if (x, y) in moved_positions and is_shock_terrain(level, x, y):
+            final_stun_turns = max(final_stun_turns, 1)
+        result.append((x, y, actor_id, final_stun_turns))
+
+    _sort_actor_items(result)
     return tuple(result)
 
 

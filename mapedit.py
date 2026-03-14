@@ -169,6 +169,7 @@ def apply_brush(level: LevelData, x: int, y: int, brush_group: str, brush_id: in
         level.terrain[y][x] = brush_id
         if brush_id == TERRAIN_VOID:
             level.actors[y][x] = ACTOR_EMPTY
+            level.actor_status[y][x] = 0
             level.goals[y][x] = GOAL_EMPTY
 
     elif brush_group == "goal":
@@ -178,6 +179,7 @@ def apply_brush(level: LevelData, x: int, y: int, brush_group: str, brush_id: in
     elif brush_group == "actor":
         if can_place_actor(level, x, y):
             level.actors[y][x] = brush_id
+            level.actor_status[y][x] = 0
 
 
 
@@ -191,6 +193,7 @@ def resize_level(old_level: LevelData, new_width: int, new_height: int) -> Level
         for x in range(copy_w):
             new_level.terrain[y][x] = old_level.terrain[y][x]
             new_level.actors[y][x] = old_level.actors[y][x]
+            new_level.actor_status[y][x] = old_level.actor_status[y][x]
             new_level.goals[y][x] = old_level.goals[y][x]
     return new_level
 
@@ -208,8 +211,13 @@ def open_state_space_window(editor: "EditorState") -> None:
             "static_level": level_to_dict(editor.level),
             "states": [
                 [
-                    {"x": int(x), "y": int(y), "actor_id": int(actor_id)}
-                    for x, y, actor_id in state
+                    {
+                        "x": int(x),
+                        "y": int(y),
+                        "actor_id": int(actor_id),
+                        "stun_turns": int(stun_turns),
+                    }
+                    for x, y, actor_id, stun_turns in state
                 ]
                 for state in editor.last_state_graph.states
             ],
@@ -1764,8 +1772,8 @@ def run_state_space_viewer(json_path: Path) -> None:
             )
 
             actor_text = "角色状态：" + ", ".join(
-                f"{actor_name(actor_id)}@({x},{y})"
-                for x, y, actor_id in states[selected_index]
+                f"{actor_name(actor_id)}@({x},{y})" + (f"[麻痹{stun_turns}]" if stun_turns > 0 else "")
+                for x, y, actor_id, stun_turns in states[selected_index]
             )
             draw_text(screen, actor_text[:36], side_rect.left + 18, preview_rect.bottom + 18, 18, SUB_TEXT_COLOR)
             if len(actor_text) > 36:
