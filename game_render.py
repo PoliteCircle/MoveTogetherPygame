@@ -162,8 +162,11 @@ def _draw_blob_actor(surface: pygame.Surface, rect: pygame.Rect, color: Tuple[in
 
 
 def _draw_ball_actor(surface: pygame.Surface, rect: pygame.Rect, color: Tuple[int, int, int]) -> None:
-    margin = max(4, rect.width // 7) + 2
-    circle_rect = rect.inflate(-margin, -margin)
+    scale = 0.5   # 越大球越大，建议 0.6 ~ 0.9
+    size = int(min(rect.width, rect.height) * scale)
+    circle_rect = pygame.Rect(0, 0, size, size)
+    circle_rect.center = rect.center
+
     pygame.draw.ellipse(surface, color, circle_rect)
 
     shine = pygame.Rect(

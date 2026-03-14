@@ -10,7 +10,7 @@ import pygame
 
 from core import LevelData, create_empty_level
 from game_render import BG_COLOR, CELL_SIZE, PANEL_COLOR, SUB_TEXT_COLOR, draw_level, draw_text
-from game_rules import MOVE_TO_CHAR
+from game_rules import MOVE_TO_CHAR, is_victory_state
 
 
 # =============================================================================
@@ -223,12 +223,28 @@ def _build_solution_path(
     if solution_index is None:
         return path_nodes, path_edges
 
+    if not (0 <= solution_index < len(parents)):
+        return path_nodes, path_edges
+
     cur = solution_index
+    visited: Set[int] = set()
+
     while cur is not None:
+        if cur in visited:
+            break
+        visited.add(cur)
+
+        if not (0 <= cur < len(parents)):
+            break
+
         path_nodes.add(cur)
         parent = parents[cur]
+
         if parent is not None:
+            if not (0 <= parent < len(parents)):
+                break
             path_edges.add((parent, cur))
+
         cur = parent
 
     return path_nodes, path_edges
@@ -294,33 +310,26 @@ def _solve_shortest_path_from_source(
     return found, parents, parent_moves, moves
 
 
-def _is_active_goal_cell(value: object) -> bool:
-    if value in (0, None, False, "", "."):
-        return False
-    return True
 
-
-# 尽量兼容不同关卡格式：
-# - all / every / strict: 所有目标点都要被角色占据
-# - any / one: 任意一个目标点被占据即可
-# 未识别时默认按“所有目标点都要满足”处理。
 def _is_goal_state(static_level: LevelData, state_items: List[dict]) -> bool:
-    actor_positions = {(int(item["x"]), int(item["y"])) for item in state_items}
-
-    goal_positions = [
-        (x, y)
-        for y, row in enumerate(static_level.goals)
-        for x, value in enumerate(row)
-        if _is_active_goal_cell(value)
-    ]
-    if not goal_positions:
-        return False
-
-    victory_mode = str(getattr(static_level, "victory_mode", "all") or "all").lower()
-    if victory_mode in {"any", "one", "or", "single"}:
-        return any(pos in actor_positions for pos in goal_positions)
-
-    return all(pos in actor_positions for pos in goal_positions)
+    """
+    直接复用 game_rules.is_victory_state 的正式胜利判定逻辑。
+    这样会正确考虑：
+    1. 目标格上是否有角色
+    2. 角色是否与该目标类型匹配
+    3. victory_mode（如 any / all_matching_goals）
+    """
+    actor_state = tuple(
+        sorted(
+            (
+                int(item["x"]),
+                int(item["y"]),
+                int(item["actor_id"]),
+            )
+            for item in state_items
+        )
+    )
+    return is_victory_state(static_level, actor_state)
 
 
 def _compute_goal_nodes(static_level: LevelData, states: List[List[dict]]) -> Set[int]:
@@ -583,6 +592,8 @@ def _draw_graph(
     screen.set_clip(graph_rect)
 
     for src, dst, _move in edges:
+        if src not in positions or dst not in positions:
+            continue
         p1 = _world_to_screen(positions[src], graph_rect, camera, zoom)
         p2 = _world_to_screen(positions[dst], graph_rect, camera, zoom)
 
@@ -862,7 +873,7 @@ def _draw_state_preview(
     pygame.draw.rect(screen, PANEL_COLOR, preview_rect)
     pygame.draw.rect(screen, (100, 104, 116), preview_rect, 1)
 
-    draw_text(screen, "状态预览", preview_rect.x + 16, preview_rect.y + 14, 28)
+    draw_text(screen, "状态空间查看", preview_rect.x + 16, preview_rect.y + 14, 28)
 
     _draw_button(screen, button_rect, "求解当前状态最短路径", mouse_pos, enabled=(selected_index is not None))
 
@@ -943,24 +954,27 @@ def run_state_space_viewer(json_path: Path) -> None:
     payload = json.loads(Path(json_path).read_text(encoding="utf-8"))
 
     static_level = level_from_dict(payload["static_level"])
-    states: List[List[dict]] = payload["states"]
-    depths: List[int] = [int(x) for x in payload["depths"]]
+    states: List[List[dict]] = payload.get("states") or []
+    depths: List[int] = [int(x) for x in (payload.get("depths") or [])]
     edges: List[Tuple[int, int, str]] = [
         (int(e["src"]), int(e["dst"]), str(e["move"]))
-        for e in payload["edges"]
+        for e in (payload.get("edges") or [])
     ]
     parents_from_start: List[Optional[int]] = [
         None if p is None else int(p)
-        for p in payload["parents"]
+        for p in (payload.get("parents") or [])
     ]
     parent_moves_from_start: List[Optional[str]] = [
         None if x is None else str(x)
-        for x in payload["parent_moves"]
+        for x in (payload.get("parent_moves") or [])
     ]
-    solution_moves_from_start: List[str] = [str(x) for x in payload.get("solution_moves", [])]
 
-    start_index = int(payload["start_index"])
-    solution_index_from_start = None if payload["solution_index"] is None else int(payload["solution_index"])
+    raw_solution_moves = payload.get("solution_moves") or []
+    solution_moves_from_start: List[str] = [str(x) for x in raw_solution_moves]
+
+    start_index = int(payload.get("start_index", 0))
+    solution_index_raw = payload.get("solution_index")
+    solution_index_from_start = None if solution_index_raw is None else int(solution_index_raw)
 
     pygame.init()
     screen = _create_viewer_window()

@@ -77,7 +77,7 @@ from game_rules import (
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_LEVEL_DIR = BASE_DIR / "levels"
-MAX_SOLUTION_STEPS = 30
+MAX_SOLUTION_STEPS = 100
 
 
 # =============================================================================

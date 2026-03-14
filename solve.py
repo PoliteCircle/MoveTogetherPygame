@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import List
 
 from core import load_level, solve_level_bfs
-
+from game_rules import MOVE_TO_CHAR
 
 BASE_DIR = Path(__file__).resolve().parent
 LEVEL_DIR = BASE_DIR / "levels"
