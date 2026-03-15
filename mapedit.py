@@ -167,6 +167,7 @@ def apply_brush(level: LevelData, x: int, y: int, brush_group: str, brush_id: in
 
     if brush_group == "terrain":
         level.terrain[y][x] = brush_id
+        level.shock_used[y][x] = 0
         if brush_id == TERRAIN_VOID:
             level.actors[y][x] = ACTOR_EMPTY
             level.actor_status[y][x] = 0
@@ -194,6 +195,7 @@ def resize_level(old_level: LevelData, new_width: int, new_height: int) -> Level
             new_level.terrain[y][x] = old_level.terrain[y][x]
             new_level.actors[y][x] = old_level.actors[y][x]
             new_level.actor_status[y][x] = old_level.actor_status[y][x]
+            new_level.shock_used[y][x] = old_level.shock_used[y][x]
             new_level.goals[y][x] = old_level.goals[y][x]
     return new_level
 
@@ -210,15 +212,24 @@ def open_state_space_window(editor: "EditorState") -> None:
         payload = {
             "static_level": level_to_dict(editor.level),
             "states": [
-                [
-                    {
-                        "x": int(x),
-                        "y": int(y),
-                        "actor_id": int(actor_id),
-                        "stun_turns": int(stun_turns),
-                    }
-                    for x, y, actor_id, stun_turns in state
-                ]
+                {
+                    "actors": [
+                        {
+                            "x": int(x),
+                            "y": int(y),
+                            "actor_id": int(actor_id),
+                            "stun_turns": int(stun_turns),
+                        }
+                        for x, y, actor_id, stun_turns in state[0]
+                    ],
+                    "used_shocks": [
+                        {
+                            "x": int(x),
+                            "y": int(y),
+                        }
+                        for x, y in state[1]
+                    ],
+                }
                 for state in editor.last_state_graph.states
             ],
             "depths": [int(d) for d in editor.last_state_graph.depths],
@@ -427,7 +438,8 @@ def _get_resource_modal_rect(panel_rect: pygame.Rect, group: str) -> pygame.Rect
     resource_groups = get_resource_groups()
     item_count = len(resource_groups[group]["items"])
     modal_h = 78 + item_count * 50 + 18
-    return pygame.Rect(panel_rect.left + 8, 150, panel_rect.width - 16, modal_h)
+    modal_y = max(16, (panel_rect.height - modal_h) // 2)
+    return pygame.Rect(panel_rect.left + 8, modal_y, panel_rect.width - 16, modal_h)
 
 
 def _draw_resource_preview(

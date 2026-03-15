@@ -17,7 +17,7 @@ from typing import Tuple
 
 import pygame
 
-from game_rules import ACTOR_EMPTY, GOAL_EMPTY, actor_def, goal_def, terrain_def
+from game_rules import ACTOR_EMPTY, GOAL_EMPTY, TERRAIN_SNOW, actor_def, goal_def, terrain_def
 
 CELL_SIZE = 56
 EDITOR_PANEL_WIDTH = 430
@@ -120,7 +120,20 @@ def _draw_ice_terrain(surface: pygame.Surface, rect: pygame.Rect) -> None:
     pygame.draw.line(surface, (235, 250, 255), (inner.left + 10, inner.centery), (inner.right - 8, inner.centery - 4), 2)
     pygame.draw.line(surface, (235, 250, 255), (inner.left + 8, inner.bottom - 10), (inner.right - 10, inner.bottom - 14), 2)
 
-def draw_terrain(surface: pygame.Surface, rect: pygame.Rect, terrain_id: int) -> None:
+def draw_terrain(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    terrain_id: int,
+    shock_used: bool = False,
+    used_shock_as_snow: bool = False,
+) -> None:
+    if terrain_id == 3 and shock_used:
+        if used_shock_as_snow:
+            _draw_snow_terrain(surface, rect)
+        else:
+            draw_terrain(surface, rect, 1, shock_used=False, used_shock_as_snow=False)
+        return
+
     info = terrain_def(terrain_id)
     pygame.draw.rect(surface, info.base_color, rect)
 
@@ -203,36 +216,54 @@ def draw_goal(surface: pygame.Surface, rect: pygame.Rect, goal_id: int) -> None:
 # 角色绘制
 # =============================================================================
 
-def _draw_blob_actor(surface: pygame.Surface, rect: pygame.Rect, color: Tuple[int, int, int], bob_phase: float = 0.0) -> None:
+def _draw_character_actor(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    color: Tuple[int, int, int],
+    scale: float,
+    bob_phase: float = 0.0,
+) -> None:
     cx, cy = rect.center
-    body = pygame.Rect(0, 0, int(rect.width * 0.58), int(rect.height * 0.58))
+    size = max(10, int(min(rect.width, rect.height) * scale))
+    body = pygame.Rect(0, 0, size, size)
     body.center = (cx, cy + int(math.sin(bob_phase) * 2))
 
     pygame.draw.ellipse(surface, color, body)
     outline = tuple(max(0, c - 55) for c in color)
     pygame.draw.ellipse(surface, outline, body, 2)
 
-    eye_y = body.y + body.height * 0.4
+    eye_y = body.y + body.height * 0.40
     eye_dx = body.width * 0.18
-    eye_r = max(2, rect.width // 18)
+    eye_r = max(2, body.width // 10)
 
     pygame.draw.circle(surface, (22, 22, 22), (int(cx - eye_dx), int(eye_y)), eye_r)
     pygame.draw.circle(surface, (22, 22, 22), (int(cx + eye_dx), int(eye_y)), eye_r)
 
+    mouth_y = body.y + body.height * 0.64
+    pygame.draw.arc(
+        surface,
+        (28, 28, 28),
+        pygame.Rect(int(cx - body.width * 0.16), int(mouth_y - body.height * 0.08), int(body.width * 0.32), int(body.height * 0.20)),
+        math.radians(15),
+        math.radians(165),
+        2,
+    )
 
-def _draw_ball_actor(surface: pygame.Surface, rect: pygame.Rect, color: Tuple[int, int, int]) -> None:
-    scale = 0.5   # 越大球越大，建议 0.6 ~ 0.9
-    size = int(min(rect.width, rect.height) * scale)
+
+def _draw_ball_actor(surface: pygame.Surface, rect: pygame.Rect, color: Tuple[int, int, int], scale: float = 0.5) -> None:
+    size = max(8, int(min(rect.width, rect.height) * scale))
     circle_rect = pygame.Rect(0, 0, size, size)
     circle_rect.center = rect.center
 
     pygame.draw.ellipse(surface, color, circle_rect)
+    outline = tuple(max(0, c - 45) for c in color)
+    pygame.draw.ellipse(surface, outline, circle_rect, 2)
 
     shine = pygame.Rect(
         circle_rect.x + circle_rect.width // 5,
         circle_rect.y + circle_rect.height // 6,
-        circle_rect.width // 4,
-        circle_rect.height // 4,
+        max(3, circle_rect.width // 4),
+        max(3, circle_rect.height // 4),
     )
     pygame.draw.ellipse(surface, (255, 255, 255), shine)
 
@@ -279,13 +310,14 @@ def draw_actor(
 
     style = info.render_style
     color = info.color
+    scale = getattr(info, "render_scale", 0.66)
 
     if style == "ball":
-        _draw_ball_actor(surface, rect, color)
+        _draw_ball_actor(surface, rect, color, scale=scale)
     elif style == "box":
         _draw_box_actor(surface, rect, color)
     else:
-        _draw_blob_actor(surface, rect, color, bob_phase)
+        _draw_character_actor(surface, rect, color, scale=scale, bob_phase=bob_phase)
 
     _draw_stunned_indicator(surface, rect, stunned_turns)
 
@@ -302,6 +334,8 @@ def draw_level(
     cell_size: int = CELL_SIZE,
 ) -> None:
     actor_status = getattr(level, "actor_status", None)
+    shock_used = getattr(level, "shock_used", None)
+    used_shock_as_snow = any(TERRAIN_SNOW in row for row in getattr(level, "terrain", []))
 
     for y in range(level.height):
         for x in range(level.width):
@@ -311,7 +345,17 @@ def draw_level(
                 cell_size,
                 cell_size,
             )
-            draw_terrain(surface, rect, level.terrain[y][x])
+            cell_shock_used = False
+            if shock_used is not None and 0 <= y < len(shock_used) and 0 <= x < len(shock_used[y]):
+                cell_shock_used = int(shock_used[y][x]) != 0
+
+            draw_terrain(
+                surface,
+                rect,
+                level.terrain[y][x],
+                shock_used=cell_shock_used,
+                used_shock_as_snow=used_shock_as_snow,
+            )
             draw_goal(surface, rect, level.goals[y][x])
 
             stunned_turns = 0

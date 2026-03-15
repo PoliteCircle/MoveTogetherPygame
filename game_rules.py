@@ -10,7 +10,7 @@ game_rules.py
 4. 角色移动、推动、胜利判定等核心规则。
 
 本版本新增：
-- 电击区：角色刚进入后，下一次输入会跳过行动（stun_turns=1）。
+- 电击区：整张图上的每个电击格只会生效一次；首次有实体进入后，该格永久失效。
 - 雪地：普通可行走地形，但只要地图中存在雪地或冰面，边界就会首尾相连。
 - 冰面：角色/被推动物体如果在本次输入中落到冰面，会沿当前方向继续滑行，直到离开冰面或无法继续。
 
@@ -35,18 +35,44 @@ TERRAIN_SNOW = 4
 TERRAIN_ICE = 5
 
 ACTOR_EMPTY = 0
+
+# 大角色（保留旧 ID，兼容已有关卡）
 ACTOR_RED = 1
 ACTOR_YELLOW = 2
 ACTOR_BLUE = 3
 ACTOR_GREEN = 4
 ACTOR_BALL = 5
 
+# 小角色（新增）
+ACTOR_SMALL_RED = 6
+ACTOR_SMALL_YELLOW = 7
+ACTOR_SMALL_BLUE = 8
+ACTOR_SMALL_GREEN = 9
+
+ACTOR_BIG_RED = ACTOR_RED
+ACTOR_BIG_YELLOW = ACTOR_YELLOW
+ACTOR_BIG_BLUE = ACTOR_BLUE
+ACTOR_BIG_GREEN = ACTOR_GREEN
+
 GOAL_EMPTY = 0
+
+# 大角色目标（保留旧 ID，兼容已有关卡）
 GOAL_RED = 1
 GOAL_YELLOW = 2
 GOAL_BLUE = 3
 GOAL_GREEN = 4
 GOAL_BALL = 5
+
+# 小角色目标（新增）
+GOAL_SMALL_RED = 6
+GOAL_SMALL_YELLOW = 7
+GOAL_SMALL_BLUE = 8
+GOAL_SMALL_GREEN = 9
+
+GOAL_BIG_RED = GOAL_RED
+GOAL_BIG_YELLOW = GOAL_YELLOW
+GOAL_BIG_BLUE = GOAL_BLUE
+GOAL_BIG_GREEN = GOAL_GREEN
 
 # 兼容旧命名
 ACTOR_SOIL = ACTOR_RED
@@ -69,9 +95,13 @@ CHAR_TO_MOVE = {v: k for k, v in MOVE_TO_CHAR.items()}
 
 DEFAULT_VICTORY_MODE = "all_matching_goals"
 
-# ActorState item: (x, y, actor_id, stun_turns)
+# ActorItem: (x, y, actor_id, stun_turns)
 ActorItem = Tuple[int, int, int, int]
-ActorState = Tuple[ActorItem, ...]
+ActorItems = Tuple[ActorItem, ...]
+UsedShockItem = Tuple[int, int]
+UsedShockState = Tuple[UsedShockItem, ...]
+# 完整状态 = (角色状态列表, 已失效的电击格坐标列表)
+ActorState = Tuple[ActorItems, UsedShockState]
 
 
 # =============================================================================
@@ -97,7 +127,9 @@ class ActorDef:
     responds_to_input: bool
     pushable: bool
     goal_id: Optional[int]
-    render_style: str = "blob"
+    render_style: str = "character"
+    render_scale: float = 0.66
+    shock_behavior: str = "obstacle"
 
 
 @dataclass(frozen=True)
@@ -173,39 +205,47 @@ TERRAIN_DEFS: Dict[int, TerrainDef] = {
 ACTOR_DEFS: Dict[int, ActorDef] = {
     ACTOR_RED: ActorDef(
         id=ACTOR_RED,
-        name="红色角色",
+        name="大红角色",
         color=(220, 74, 74),
         responds_to_input=True,
         pushable=False,
         goal_id=GOAL_RED,
-        render_style="blob",
+        render_style="character",
+        render_scale=0.78,
+        shock_behavior="obstacle",
     ),
     ACTOR_YELLOW: ActorDef(
         id=ACTOR_YELLOW,
-        name="黄色角色",
+        name="大黄角色",
         color=(236, 202, 70),
         responds_to_input=True,
         pushable=False,
         goal_id=GOAL_YELLOW,
-        render_style="blob",
+        render_style="character",
+        render_scale=0.78,
+        shock_behavior="obstacle",
     ),
     ACTOR_BLUE: ActorDef(
         id=ACTOR_BLUE,
-        name="蓝色角色",
+        name="大蓝角色",
         color=(74, 136, 236),
         responds_to_input=True,
         pushable=False,
         goal_id=GOAL_BLUE,
-        render_style="blob",
+        render_style="character",
+        render_scale=0.78,
+        shock_behavior="obstacle",
     ),
     ACTOR_GREEN: ActorDef(
         id=ACTOR_GREEN,
-        name="绿色角色",
+        name="大绿角色",
         color=(72, 190, 116),
         responds_to_input=True,
         pushable=False,
         goal_id=GOAL_GREEN,
-        render_style="blob",
+        render_style="character",
+        render_scale=0.78,
+        shock_behavior="obstacle",
     ),
     ACTOR_BALL: ActorDef(
         id=ACTOR_BALL,
@@ -215,34 +255,80 @@ ACTOR_DEFS: Dict[int, ActorDef] = {
         pushable=True,
         goal_id=GOAL_BALL,
         render_style="ball",
+        render_scale=0.48,
+        shock_behavior="ball",
+    ),
+    ACTOR_SMALL_RED: ActorDef(
+        id=ACTOR_SMALL_RED,
+        name="小红角色",
+        color=(220, 74, 74),
+        responds_to_input=True,
+        pushable=False,
+        goal_id=GOAL_SMALL_RED,
+        render_style="character",
+        render_scale=0.56,
+        shock_behavior="ball",
+    ),
+    ACTOR_SMALL_YELLOW: ActorDef(
+        id=ACTOR_SMALL_YELLOW,
+        name="小黄角色",
+        color=(236, 202, 70),
+        responds_to_input=True,
+        pushable=False,
+        goal_id=GOAL_SMALL_YELLOW,
+        render_style="character",
+        render_scale=0.56,
+        shock_behavior="ball",
+    ),
+    ACTOR_SMALL_BLUE: ActorDef(
+        id=ACTOR_SMALL_BLUE,
+        name="小蓝角色",
+        color=(74, 136, 236),
+        responds_to_input=True,
+        pushable=False,
+        goal_id=GOAL_SMALL_BLUE,
+        render_style="character",
+        render_scale=0.56,
+        shock_behavior="ball",
+    ),
+    ACTOR_SMALL_GREEN: ActorDef(
+        id=ACTOR_SMALL_GREEN,
+        name="小绿角色",
+        color=(72, 190, 116),
+        responds_to_input=True,
+        pushable=False,
+        goal_id=GOAL_SMALL_GREEN,
+        render_style="character",
+        render_scale=0.56,
+        shock_behavior="ball",
     ),
 }
 
 GOAL_DEFS: Dict[int, GoalDef] = {
     GOAL_RED: GoalDef(
         id=GOAL_RED,
-        name="红色目标",
+        name="大红目标",
         actor_id=ACTOR_RED,
         color=(220, 74, 74),
         render_shape="square",
     ),
     GOAL_YELLOW: GoalDef(
         id=GOAL_YELLOW,
-        name="黄色目标",
+        name="大黄目标",
         actor_id=ACTOR_YELLOW,
         color=(236, 202, 70),
         render_shape="square",
     ),
     GOAL_BLUE: GoalDef(
         id=GOAL_BLUE,
-        name="蓝色目标",
+        name="大蓝目标",
         actor_id=ACTOR_BLUE,
         color=(74, 136, 236),
         render_shape="square",
     ),
     GOAL_GREEN: GoalDef(
         id=GOAL_GREEN,
-        name="绿色目标",
+        name="大绿目标",
         actor_id=ACTOR_GREEN,
         color=(72, 190, 116),
         render_shape="square",
@@ -252,6 +338,34 @@ GOAL_DEFS: Dict[int, GoalDef] = {
         name="小球目标",
         actor_id=ACTOR_BALL,
         color=(240, 240, 240),
+        render_shape="circle",
+    ),
+    GOAL_SMALL_RED: GoalDef(
+        id=GOAL_SMALL_RED,
+        name="小红目标",
+        actor_id=ACTOR_SMALL_RED,
+        color=(220, 74, 74),
+        render_shape="circle",
+    ),
+    GOAL_SMALL_YELLOW: GoalDef(
+        id=GOAL_SMALL_YELLOW,
+        name="小黄目标",
+        actor_id=ACTOR_SMALL_YELLOW,
+        color=(236, 202, 70),
+        render_shape="circle",
+    ),
+    GOAL_SMALL_BLUE: GoalDef(
+        id=GOAL_SMALL_BLUE,
+        name="小蓝目标",
+        actor_id=ACTOR_SMALL_BLUE,
+        color=(74, 136, 236),
+        render_shape="circle",
+    ),
+    GOAL_SMALL_GREEN: GoalDef(
+        id=GOAL_SMALL_GREEN,
+        name="小绿目标",
+        actor_id=ACTOR_SMALL_GREEN,
+        color=(72, 190, 116),
         render_shape="circle",
     ),
 }
@@ -306,9 +420,31 @@ def actor_responds_to_input(actor_id: int) -> bool:
     return bool(info and info.responds_to_input)
 
 
+def actor_shock_behavior(actor_id: int) -> str:
+    info = actor_def(actor_id)
+    return info.shock_behavior if info else "obstacle"
+
+
 def actor_is_pushable(actor_id: int) -> bool:
     info = actor_def(actor_id)
     return bool(info and info.pushable)
+
+
+def actor_is_pushable_in_state(actor_id: int, stunned_turns: int) -> bool:
+    """
+    按“当前这个输入回合”的状态判断该实体能否被推动。
+
+    - 常态下：沿用角色默认 pushable 属性；
+    - 被电击冻结时：
+      * 大角色 -> 像障碍物，不可推动；
+      * 小角色 -> 像小球，可推动。
+    """
+    info = actor_def(actor_id)
+    if info is None:
+        return False
+    if stunned_turns > 0 and info.responds_to_input:
+        return info.shock_behavior == "ball"
+    return info.pushable
 
 
 def terrain_is_walkable(terrain_id: int) -> bool:
@@ -395,22 +531,74 @@ def _sort_actor_items(items: List[ActorItem]) -> None:
     items.sort(key=lambda item: (item[1], item[0], item[2], item[3]))
 
 
+def _coerce_used_shock_item(item: Tuple[int, ...]) -> UsedShockItem:
+    if len(item) != 2:
+        raise ValueError(f"非法电击格坐标: {item!r}")
+    return int(item[0]), int(item[1])
+
+
+def _sort_used_shocks(items: List[UsedShockItem]) -> None:
+    items.sort(key=lambda item: (item[1], item[0]))
+
+
+def _looks_like_actor_item(value) -> bool:
+    return isinstance(value, tuple) and len(value) in (3, 4) and all(isinstance(x, int) for x in value)
+
+
+def _looks_like_actor_items(value) -> bool:
+    return isinstance(value, tuple) and (len(value) == 0 or _looks_like_actor_item(value[0]))
+
+
+def _looks_like_used_shocks(value) -> bool:
+    return isinstance(value, tuple) and (
+        len(value) == 0
+        or (isinstance(value[0], tuple) and len(value[0]) == 2 and all(isinstance(x, int) for x in value[0]))
+    )
+
+
+def split_actor_state(state) -> Tuple[ActorItems, UsedShockState]:
+    # 兼容两种状态格式：
+    # 1. 新格式：(actors, used_shocks)
+    # 2. 旧格式：仅 actors
+    if (
+        isinstance(state, tuple)
+        and len(state) == 2
+        and _looks_like_actor_items(state[0])
+        and _looks_like_used_shocks(state[1])
+    ):
+        actor_items = [_coerce_state_item(item) for item in state[0]]
+        used_shocks = [_coerce_used_shock_item(item) for item in state[1]]
+        _sort_actor_items(actor_items)
+        _sort_used_shocks(used_shocks)
+        return tuple(actor_items), tuple(used_shocks)
+
+    actor_items = [_coerce_state_item(item) for item in state]
+    _sort_actor_items(actor_items)
+    return tuple(actor_items), tuple()
+
+
 def actor_state_from_level(level) -> ActorState:
     result: List[ActorItem] = []
     actor_status = getattr(level, "actor_status", None)
+    shock_used_grid = getattr(level, "shock_used", None)
+    used_shocks: List[UsedShockItem] = []
 
     for y in range(level.height):
         for x in range(level.width):
             actor_id = level.actors[y][x]
-            if actor_id == ACTOR_EMPTY:
-                continue
-            stun_turns = 0
-            if actor_status is not None and 0 <= y < len(actor_status) and 0 <= x < len(actor_status[y]):
-                stun_turns = max(0, int(actor_status[y][x]))
-            result.append((x, y, actor_id, stun_turns))
+            if actor_id != ACTOR_EMPTY:
+                stun_turns = 0
+                if actor_status is not None and 0 <= y < len(actor_status) and 0 <= x < len(actor_status[y]):
+                    stun_turns = max(0, int(actor_status[y][x]))
+                result.append((x, y, actor_id, stun_turns))
+
+            if shock_used_grid is not None and 0 <= y < len(shock_used_grid) and 0 <= x < len(shock_used_grid[y]):
+                if int(shock_used_grid[y][x]) != 0:
+                    used_shocks.append((x, y))
 
     _sort_actor_items(result)
-    return tuple(result)
+    _sort_used_shocks(used_shocks)
+    return tuple(result), tuple(used_shocks)
 
 
 def is_inside(level, x: int, y: int) -> bool:
@@ -459,6 +647,10 @@ def is_shock_terrain(level, x: int, y: int) -> bool:
     return is_inside(level, x, y) and terrain_is_shock(level.terrain[y][x])
 
 
+def is_active_shock_terrain(level, used_shocks: Set[UsedShockItem], x: int, y: int) -> bool:
+    return is_shock_terrain(level, x, y) and (x, y) not in used_shocks
+
+
 def is_ice_terrain(level, x: int, y: int) -> bool:
     return is_inside(level, x, y) and terrain_is_ice(level.terrain[y][x])
 
@@ -472,15 +664,22 @@ def can_place_goal(level, x: int, y: int) -> bool:
 
 
 def level_from_actor_state(level, state: ActorState):
+    actor_items, used_shocks = split_actor_state(state)
+
     new_level = level.clone()
     new_level.actors = [[ACTOR_EMPTY for _ in range(level.width)] for _ in range(level.height)]
     new_level.actor_status = [[0 for _ in range(level.width)] for _ in range(level.height)]
+    new_level.shock_used = [[0 for _ in range(level.width)] for _ in range(level.height)]
 
-    for raw_item in state:
+    for raw_item in actor_items:
         x, y, actor_id, stun_turns = _coerce_state_item(raw_item)
         if is_inside(new_level, x, y):
             new_level.actors[y][x] = actor_id
             new_level.actor_status[y][x] = max(0, int(stun_turns))
+
+    for x, y in used_shocks:
+        if is_inside(new_level, x, y):
+            new_level.shock_used[y][x] = 1
     return new_level
 
 
@@ -489,7 +688,8 @@ def level_from_actor_state(level, state: ActorState):
 # =============================================================================
 
 def is_victory_state(level, state: ActorState) -> bool:
-    actor_map = {(x, y): actor_id for x, y, actor_id, _ in (_coerce_state_item(item) for item in state)}
+    actor_items, _ = split_actor_state(state)
+    actor_map = {(x, y): actor_id for x, y, actor_id, _ in actor_items}
 
     if level.victory_mode == "any":
         for y in range(level.height):
@@ -519,7 +719,8 @@ def is_victory_state(level, state: ActorState) -> bool:
 
 def _sorted_state_for_move(state: ActorState, move_name: str) -> List[ActorItem]:
     dx, dy = DIRS[move_name]
-    items = [_coerce_state_item(item) for item in state]
+    actor_items, _ = split_actor_state(state)
+    items = list(actor_items)
 
     if dx > 0:
         items.sort(key=lambda item: (-item[0], item[1], item[2], item[3]))
@@ -562,6 +763,7 @@ def _collect_push_chain(
     dx: int,
     dy: int,
     wrap_enabled: bool,
+    frozen_entity_ids: Set[int],
 ) -> Optional[List[int]]:
     """
     从 front cell 开始收集一整条可被推动的链。
@@ -572,6 +774,10 @@ def _collect_push_chain(
 
     在联通边界地图里，这里会额外做“环检测”：
     如果一整圈都被物体占满而找不到空位，就不能推动，避免无限循环。
+
+    注意：
+    - 正在被冻结的小角色，在这一整个输入回合里都按“小球”处理，可被推动；
+    - 正在被冻结的大角色，在这一整个输入回合里都按“障碍物”处理，不可被推动。
     """
     chain: List[int] = []
     visited_positions: Set[Tuple[int, int]] = set()
@@ -589,7 +795,8 @@ def _collect_push_chain(
             return chain
 
         actor_id = entities[eid]["actor_id"]
-        if not actor_is_pushable(actor_id):
+        stunned_turns_for_push = entities[eid]["stun_turns"] if eid in frozen_entity_ids else 0
+        if not actor_is_pushable_in_state(actor_id, stunned_turns_for_push):
             return None
         chain.append(eid)
 
@@ -622,6 +829,7 @@ def _attempt_single_step(
     dx: int,
     dy: int,
     wrap_enabled: bool,
+    frozen_entity_ids: Set[int],
 ) -> Optional[List[int]]:
     """
     让某个实体尝试向当前方向移动一小步（必要时带着整条可推动链一起动）。
@@ -645,7 +853,17 @@ def _attempt_single_step(
     moved_ids: List[int] = []
 
     if blocker_id is not None:
-        chain = _collect_push_chain(level, occupied, entities, nx, ny, dx, dy, wrap_enabled)
+        chain = _collect_push_chain(
+            level,
+            occupied,
+            entities,
+            nx,
+            ny,
+            dx,
+            dy,
+            wrap_enabled,
+            frozen_entity_ids,
+        )
         if chain is None:
             return None
 
@@ -670,27 +888,25 @@ def move_actor_state(level, state: ActorState, move_name: str) -> ActorState:
 
     本函数同时处理：
     1. 正常移动 / 推动；
-    2. 电击区导致的“下一回合跳过”；
-    3. 雪地/冰面触发的全图联通边界；
-    4. 冰面上的持续滑行。
-
-    关键实现思路：
-    - 先把状态转换成带 entity_id 的内部结构，方便跟踪“同一个物体”在同一回合内多次滑行；
-    - 初始 active 集合只放“会响应输入”的角色；
-    - 如果某个实体在本回合落到了冰面，就把它加入下一轮 active，继续沿原方向滑；
-    - 被推动的小球如果被推到冰面，也会继续滑；
-    - 如果某个实体在冰面环上反复回到同一冰格，则停止继续滑，避免无限循环。
+    2. 电击区导致的“下一输入回合冻结”；
+    3. 每个电击格仅首次进入时生效一次，之后永久按普通地面处理；
+    4. 雪地/冰面触发的全图联通边界；
+    5. 冰面上的持续滑行；
+    6. 冻结中的大/小角色差异：
+       - 大角色：像障碍物，不能主动移动，也不能被推动；
+       - 小角色：像小球，不能主动移动，但仍可被推动/在冰面上继续滑行。
     """
     if move_name not in DIRS:
-        return tuple(_coerce_state_item(item) for item in state)
+        return split_actor_state(state)
 
     dx, dy = DIRS[move_name]
     wrap_enabled = level_has_wrapping_edges(level)
+    actor_items, used_shock_state = split_actor_state(state)
+    used_shocks: Set[UsedShockItem] = set(used_shock_state)
 
-    # entity_id -> {x, y, actor_id, stun_turns}
     entities: Dict[int, Dict[str, int]] = {}
     occupied: Dict[Tuple[int, int], int] = {}
-    for entity_id, raw_item in enumerate(_coerce_state_item(item) for item in state):
+    for entity_id, raw_item in enumerate(actor_items):
         x, y, actor_id, stun_turns = raw_item
         entities[entity_id] = {
             "x": x,
@@ -700,17 +916,20 @@ def move_actor_state(level, state: ActorState, move_name: str) -> ActorState:
         }
         occupied[(x, y)] = entity_id
 
-    # 第一轮只有“会响应输入”的角色会尝试行动。
+    frozen_this_turn: Set[int] = {
+        entity_id
+        for entity_id, info in entities.items()
+        if actor_responds_to_input(info["actor_id"]) and info["stun_turns"] > 0
+    }
+
     active_ids: Set[int] = {
         entity_id
         for entity_id, info in entities.items()
-        if actor_responds_to_input(info["actor_id"])
+        if actor_responds_to_input(info["actor_id"]) and entity_id not in frozen_this_turn
     }
 
-    # 记录本回合哪些实体进入过电击区；回合结算时给它们挂 1 层麻痹。
     entered_shock_ids: Set[int] = set()
-
-    # 记录每个实体在本回合滑冰时已经到过哪些冰格，用来防止环形冰道无限滑动。
+    consumed_shocks_this_turn: Set[UsedShockItem] = set()
     ice_visited: Dict[int, Set[Tuple[int, int]]] = {entity_id: set() for entity_id in entities}
 
     while active_ids:
@@ -721,12 +940,6 @@ def move_actor_state(level, state: ActorState, move_name: str) -> ActorState:
             if info is None:
                 continue
 
-            current_stun_turns = info["stun_turns"]
-            if current_stun_turns > 0:
-                # 电击效果：下一次输入直接跳过行动，然后层数减 1。
-                info["stun_turns"] = current_stun_turns - 1
-                continue
-
             moved_ids = _attempt_single_step(
                 level=level,
                 occupied=occupied,
@@ -735,6 +948,7 @@ def move_actor_state(level, state: ActorState, move_name: str) -> ActorState:
                 dx=dx,
                 dy=dy,
                 wrap_enabled=wrap_enabled,
+                frozen_entity_ids=frozen_this_turn,
             )
             if not moved_ids:
                 continue
@@ -743,20 +957,24 @@ def move_actor_state(level, state: ActorState, move_name: str) -> ActorState:
                 mx = entities[moved_id]["x"]
                 my = entities[moved_id]["y"]
 
-                if is_shock_terrain(level, mx, my):
+                if is_active_shock_terrain(level, used_shocks | consumed_shocks_this_turn, mx, my):
                     entered_shock_ids.add(moved_id)
+                    consumed_shocks_this_turn.add((mx, my))
 
                 if is_ice_terrain(level, mx, my):
-                    # 本回合落在冰面上的实体，下一个微步会继续沿同方向滑动。
-                    # 若回到已经到过的冰格，说明出现了环，不再继续滑。
                     if (mx, my) not in ice_visited[moved_id]:
                         ice_visited[moved_id].add((mx, my))
                         next_active_ids.add(moved_id)
 
         active_ids = next_active_ids
 
+    for entity_id in frozen_this_turn:
+        entities[entity_id]["stun_turns"] = max(0, entities[entity_id]["stun_turns"] - 1)
+
     for entity_id in entered_shock_ids:
         entities[entity_id]["stun_turns"] = max(entities[entity_id]["stun_turns"], 1)
+
+    used_shocks.update(consumed_shocks_this_turn)
 
     result: List[ActorItem] = []
     for info in entities.values():
@@ -768,7 +986,9 @@ def move_actor_state(level, state: ActorState, move_name: str) -> ActorState:
         ))
 
     _sort_actor_items(result)
-    return tuple(result)
+    used_shock_result = list(used_shocks)
+    _sort_used_shocks(used_shock_result)
+    return tuple(result), tuple(used_shock_result)
 
 
 def move_level(level, move_name: str):

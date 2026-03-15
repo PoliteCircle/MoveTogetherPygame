@@ -38,6 +38,7 @@ class LevelData:
     actors: List[List[int]]
     goals: List[List[int]]
     actor_status: List[List[int]]
+    shock_used: List[List[int]]
     victory_mode: str = DEFAULT_VICTORY_MODE
 
     def clone(self) -> "LevelData":
@@ -49,6 +50,7 @@ class LevelData:
             actors=[row[:] for row in self.actors],
             goals=[row[:] for row in self.goals],
             actor_status=[row[:] for row in self.actor_status],
+            shock_used=[row[:] for row in self.shock_used],
             victory_mode=self.victory_mode,
         )
 
@@ -74,6 +76,7 @@ def create_empty_level(width: int, height: int, name: str = "新关卡") -> Leve
     actors = [[ACTOR_EMPTY for _ in range(width)] for _ in range(height)]
     goals = [[GOAL_EMPTY for _ in range(width)] for _ in range(height)]
     actor_status = [[0 for _ in range(width)] for _ in range(height)]
+    shock_used = [[0 for _ in range(width)] for _ in range(height)]
     return LevelData(
         name=name,
         width=width,
@@ -82,6 +85,7 @@ def create_empty_level(width: int, height: int, name: str = "新关卡") -> Leve
         actors=actors,
         goals=goals,
         actor_status=actor_status,
+        shock_used=shock_used,
     )
 
 
@@ -94,6 +98,7 @@ def level_to_dict(level: LevelData) -> dict:
         "actors": level.actors,
         "goals": level.goals,
         "actor_status": level.actor_status,
+        "shock_used": level.shock_used,
         "victory_mode": level.victory_mode,
     }
 
@@ -126,6 +131,8 @@ def validate_level_dict(data: dict) -> None:
 
     if "actor_status" in data:
         _validate_layer(data, "actor_status", width, height)
+    if "shock_used" in data:
+        _validate_layer(data, "shock_used", width, height)
 
 
 def load_level(path: str | Path) -> LevelData:
@@ -139,6 +146,10 @@ def load_level(path: str | Path) -> LevelData:
     if actor_status is None:
         actor_status = [[0 for _ in range(width)] for _ in range(height)]
 
+    shock_used = data.get("shock_used")
+    if shock_used is None:
+        shock_used = [[0 for _ in range(width)] for _ in range(height)]
+
     return LevelData(
         name=data["name"],
         width=width,
@@ -147,6 +158,7 @@ def load_level(path: str | Path) -> LevelData:
         actors=data["actors"],
         goals=data["goals"],
         actor_status=actor_status,
+        shock_used=shock_used,
         victory_mode=data.get("victory_mode", DEFAULT_VICTORY_MODE),
     )
 

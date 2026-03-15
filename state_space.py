@@ -65,6 +65,9 @@ def level_from_dict(data: dict) -> LevelData:
     actor_status = data.get("actor_status")
     if actor_status is not None:
         level.actor_status = [list(row) for row in actor_status]
+    shock_used = data.get("shock_used")
+    if shock_used is not None:
+        level.shock_used = [list(row) for row in shock_used]
 
     if "victory_mode" in data:
         level.victory_mode = data["victory_mode"]
@@ -72,19 +75,52 @@ def level_from_dict(data: dict) -> LevelData:
     return level
 
 
-def build_level_from_state(static_level: LevelData, state_items: List[dict]) -> LevelData:
+def _parse_state_entry(entry) -> Tuple[Tuple[Tuple[int, int, int, int], ...], Tuple[Tuple[int, int], ...]]:
+    if isinstance(entry, dict):
+        actors_src = entry.get("actors") or []
+        used_shocks_src = entry.get("used_shocks") or []
+    else:
+        actors_src = entry or []
+        used_shocks_src = []
+
+    actors = tuple(
+        sorted(
+            (
+                int(item["x"]),
+                int(item["y"]),
+                int(item["actor_id"]),
+                int(item.get("stun_turns", 0)),
+            )
+            for item in actors_src
+        )
+    )
+    used_shocks = tuple(
+        sorted(
+            (int(item["x"]), int(item["y"]))
+            for item in used_shocks_src
+        )
+    )
+    return actors, used_shocks
+
+
+def build_level_from_state(static_level: LevelData, state_entry) -> LevelData:
+    actor_items, used_shocks = _parse_state_entry(state_entry) if not (
+        isinstance(state_entry, tuple) and len(state_entry) == 2 and isinstance(state_entry[0], tuple) and isinstance(state_entry[1], tuple)
+    ) else state_entry
+
     level = static_level.clone()
     level.actors = [[0 for _ in range(level.width)] for _ in range(level.height)]
     level.actor_status = [[0 for _ in range(level.width)] for _ in range(level.height)]
+    level.shock_used = [[0 for _ in range(level.width)] for _ in range(level.height)]
 
-    for item in state_items:
-        x = int(item["x"])
-        y = int(item["y"])
-        actor_id = int(item["actor_id"])
-        stun_turns = int(item.get("stun_turns", 0))
+    for x, y, actor_id, stun_turns in actor_items:
         if 0 <= x < level.width and 0 <= y < level.height:
             level.actors[y][x] = actor_id
             level.actor_status[y][x] = stun_turns
+
+    for x, y in used_shocks:
+        if 0 <= x < level.width and 0 <= y < level.height:
+            level.shock_used[y][x] = 1
 
     return level
 
@@ -317,30 +353,23 @@ def _solve_shortest_path_from_source(
 
 
 
-def _is_goal_state(static_level: LevelData, state_items: List[dict]) -> bool:
+def _is_goal_state(static_level: LevelData, state_entry) -> bool:
     """
     直接复用 game_rules.is_victory_state 的正式胜利判定逻辑。
     这样会正确考虑：
     1. 目标格上是否有角色
     2. 角色是否与该目标类型匹配
     3. victory_mode（如 any / all_matching_goals）
+    4. 电击格是否已经在该状态中失效
     """
-    actor_state = tuple(
-        sorted(
-            (
-                int(item["x"]),
-                int(item["y"]),
-                int(item["actor_id"]),
-                int(item.get("stun_turns", 0)),
-            )
-            for item in state_items
-        )
-    )
+    actor_state = _parse_state_entry(state_entry) if not (
+        isinstance(state_entry, tuple) and len(state_entry) == 2 and isinstance(state_entry[0], tuple) and isinstance(state_entry[1], tuple)
+    ) else state_entry
     return is_victory_state(static_level, actor_state)
 
 
-def _compute_goal_nodes(static_level: LevelData, states: List[List[dict]]) -> Set[int]:
-    return {idx for idx, state_items in enumerate(states) if _is_goal_state(static_level, state_items)}
+def _compute_goal_nodes(static_level: LevelData, states) -> Set[int]:
+    return {idx for idx, state_entry in enumerate(states) if _is_goal_state(static_level, state_entry)}
 
 
 def _analyze_selected_connections(
@@ -961,7 +990,8 @@ def run_state_space_viewer(json_path: Path) -> None:
     payload = json.loads(Path(json_path).read_text(encoding="utf-8"))
 
     static_level = level_from_dict(payload["static_level"])
-    states: List[List[dict]] = payload.get("states") or []
+    raw_states = payload.get("states") or []
+    states = [_parse_state_entry(entry) for entry in raw_states]
     depths: List[int] = [int(x) for x in (payload.get("depths") or [])]
     edges: List[Tuple[int, int, str]] = [
         (int(e["src"]), int(e["dst"]), str(e["move"]))
