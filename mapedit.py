@@ -67,10 +67,12 @@ from game_rules import (
     ACTOR_EMPTY,
     GOAL_EMPTY,
     TERRAIN_FLOOR,
+    TERRAIN_SHOCK,
     TERRAIN_VOID,
     actor_name,
     can_place_actor,
     can_place_goal,
+    can_place_shock,
     get_base_brush_by_group,
     get_resource_groups, MOVE_TO_CHAR,
 )
@@ -167,26 +169,36 @@ def apply_brush(level: LevelData, x: int, y: int, brush_group: str, brush_id: in
 
     if brush_group == "terrain":
         level.terrain[y][x] = brush_id
-        level.shock_used[y][x] = 0
         if brush_id == TERRAIN_VOID:
             level.actors[y][x] = ACTOR_EMPTY
-            level.actor_status[y][x] = 0
             level.goals[y][x] = GOAL_EMPTY
+            level.shock[y][x] = 0
+        elif not can_place_shock(level, x, y):
+            level.shock[y][x] = 0
+
+    elif brush_group == "shock":
+        if brush_id == 0:
+            level.shock[y][x] = 0
+        elif can_place_shock(level, x, y):
+            level.shock[y][x] = 1
 
     elif brush_group == "goal":
-        if can_place_goal(level, x, y):
+        if brush_id == GOAL_EMPTY:
+            level.goals[y][x] = brush_id
+        elif can_place_goal(level, x, y):
             level.goals[y][x] = brush_id
 
     elif brush_group == "actor":
-        if can_place_actor(level, x, y):
+        if brush_id == ACTOR_EMPTY:
             level.actors[y][x] = brush_id
-            level.actor_status[y][x] = 0
+        elif can_place_actor(level, x, y):
+            level.actors[y][x] = brush_id
 
 
 
 def resize_level(old_level: LevelData, new_width: int, new_height: int) -> LevelData:
     new_level = create_empty_level(new_width, new_height, name=old_level.name)
-    new_level.victory_mode = old_level.victory_mode
+    new_level.boundary = old_level.boundary
 
     copy_w = min(old_level.width, new_width)
     copy_h = min(old_level.height, new_height)
@@ -194,9 +206,8 @@ def resize_level(old_level: LevelData, new_width: int, new_height: int) -> Level
         for x in range(copy_w):
             new_level.terrain[y][x] = old_level.terrain[y][x]
             new_level.actors[y][x] = old_level.actors[y][x]
-            new_level.actor_status[y][x] = old_level.actor_status[y][x]
-            new_level.shock_used[y][x] = old_level.shock_used[y][x]
             new_level.goals[y][x] = old_level.goals[y][x]
+            new_level.shock[y][x] = old_level.shock[y][x]
     return new_level
 
 
@@ -412,17 +423,23 @@ def build_buttons(level: LevelData) -> Dict[str, Button]:
     buttons["terrain"] = Button(pygame.Rect(left_x, y, col_w, 68), "选择地形")
     buttons["goal"] = Button(pygame.Rect(right_x, y, col_w, 68), "选择目标位置")
 
-    # 第二行：资源按钮 + 求解
+    # 第二行：资源按钮
     y += 76
     buttons["actor"] = Button(pygame.Rect(left_x, y, col_w, 68), "选择角色")
-    buttons["solve"] = Button(pygame.Rect(right_x, y, col_w, 68), f"求{MAX_SOLUTION_STEPS}步内最短解")
+    buttons["shock"] = Button(pygame.Rect(right_x, y, col_w, 68), "选择电击区")
 
-    # 第三行：普通按钮
+    # 第三行：边界 + 求解
     y += 76
+    boundary_text = "边界：开放" if getattr(level, "boundary", "closed") == "open" else "边界：封闭"
+    buttons["boundary"] = Button(pygame.Rect(left_x, y, col_w, 36), boundary_text)
+    buttons["solve"] = Button(pygame.Rect(right_x, y, col_w, 36), f"求{MAX_SOLUTION_STEPS}步内最短解")
+
+    # 第四行：普通按钮
+    y += 44
     buttons["new"] = Button(pygame.Rect(left_x, y, col_w, 36), "新建关卡")
     buttons["save"] = Button(pygame.Rect(right_x, y, col_w, 36), "保存关卡")
 
-    # 第四行：普通按钮
+    # 第五行：普通按钮
     y += 44
     buttons["open"] = Button(pygame.Rect(left_x, y, col_w, 36), "打开关卡")
     buttons["state_space"] = Button(pygame.Rect(right_x, y, col_w, 36), "查看状态空间")
@@ -458,6 +475,10 @@ def _draw_resource_preview(
     elif group == "actor":
         draw_terrain(screen, rect, TERRAIN_FLOOR)
         draw_actor(screen, rect, item_id)
+    elif group == "shock":
+        draw_terrain(screen, rect, TERRAIN_FLOOR)
+        if item_id != 0:
+            draw_terrain(screen, rect, TERRAIN_SHOCK)
 
     pygame.draw.rect(screen, (120, 124, 136), rect, 1, border_radius=6)
 
@@ -969,7 +990,7 @@ def draw_ui(screen: pygame.Surface, editor: EditorState, mouse_pos: Tuple[int, i
         btn = buttons[key]
         btn.draw(screen, btn.rect.collidepoint(mouse_pos))
 
-    for key in ("terrain", "goal", "actor"):
+    for key in ("terrain", "goal", "actor", "shock"):
         btn = buttons[key]
         _draw_resource_button(
             screen=screen,
@@ -981,7 +1002,7 @@ def draw_ui(screen: pygame.Surface, editor: EditorState, mouse_pos: Tuple[int, i
             selected=(editor.current_brush_group == key),
         )
 
-    for key in ("solve", "new", "save", "open", "state_space"):
+    for key in ("boundary", "solve", "new", "save", "open", "state_space"):
         btn = buttons[key]
         btn.draw(screen, btn.rect.collidepoint(mouse_pos))
 
@@ -1005,7 +1026,8 @@ def draw_ui(screen: pygame.Surface, editor: EditorState, mouse_pos: Tuple[int, i
 
     draw_text(screen, "状态", panel_rect.left + 18, info_y + 84, 22)
     draw_text(screen, editor.status_text, panel_rect.left + 18, info_y + 112, 18, SUB_TEXT_COLOR)
-    draw_text(screen, "点击“查看状态空间”打开新窗口", panel_rect.left + 18, info_y + 138, 17, SUB_TEXT_COLOR)
+    draw_text(screen, f"边界模式：{'开放' if editor.level.boundary == 'open' else '封闭'}", panel_rect.left + 18, info_y + 138, 17, SUB_TEXT_COLOR)
+    draw_text(screen, "点击“查看状态空间”打开新窗口", panel_rect.left + 18, info_y + 160, 17, SUB_TEXT_COLOR)
 
     # ---------- 右侧更宽的最短解输出区 ----------
     pygame.draw.rect(screen, (28, 30, 36), solution_rect, border_radius=10)
@@ -1311,7 +1333,7 @@ def click_open_panel(editor: EditorState, pos: Tuple[int, int], screen_size: Tup
 
 
 def handle_button_action(editor: EditorState, key: str) -> None:
-    if key in ("terrain", "goal", "actor"):
+    if key in ("terrain", "goal", "actor", "shock"):
         editor.resource_panel_open = True
         editor.resource_panel_group = key
         editor.open_file_panel_open = False
@@ -1344,6 +1366,12 @@ def handle_button_action(editor: EditorState, key: str) -> None:
         editor.height_input = str(editor.level.height)
         editor.status_text = f"地图高度已调整为 {editor.level.height}"
 
+    elif key == "boundary":
+        editor.level.boundary = "open" if editor.level.boundary == "closed" else "closed"
+        if hasattr(editor.level, "_has_wrapping_edges_cache"):
+            delattr(editor.level, "_has_wrapping_edges_cache")
+        editor.status_text = f"地图边界已切换为：{'开放' if editor.level.boundary == 'open' else '封闭'}"
+
     elif key == "new":
         do_new_level(editor)
     elif key == "save":
@@ -1370,7 +1398,8 @@ def _level_from_payload(data: dict) -> LevelData:
         terrain=[[int(v) for v in row] for row in data["terrain"]],
         actors=[[int(v) for v in row] for row in data["actors"]],
         goals=[[int(v) for v in row] for row in data["goals"]],
-        victory_mode=data.get("victory_mode", "all_actors_on_goals"),
+        boundary=data.get("boundary", "closed"),
+        shock=[[int(v) for v in row] for row in data.get("shock", [[0 for _ in range(int(data["width"]))] for _ in range(int(data["height"]))])],
     )
 
 
@@ -1932,7 +1961,7 @@ def run_editor(level_dir=None) -> None:
                     buttons = build_buttons(editor.level)
 
                     handled_resource_thumb = False
-                    for key in ("terrain", "goal", "actor"):
+                    for key in ("terrain", "goal", "actor", "shock"):
                         btn = buttons[key]
                         thumb_rect = pygame.Rect(
                             btn.rect.x + 8,

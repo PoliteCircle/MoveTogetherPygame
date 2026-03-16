@@ -480,7 +480,18 @@ def can_place_goal_on_terrain_id(terrain_id: int) -> bool:
 # =============================================================================
 
 def build_terrain_resources() -> List[dict]:
-    return [{"id": tid, "name": info.name} for tid, info in sorted(TERRAIN_DEFS.items(), key=lambda x: x[0])]
+    return [
+        {"id": tid, "name": info.name}
+        for tid, info in sorted(TERRAIN_DEFS.items(), key=lambda x: x[0])
+        if tid != TERRAIN_SHOCK
+    ]
+
+
+def build_shock_resources() -> List[dict]:
+    return [
+        {"id": 0, "name": "无电击区"},
+        {"id": 1, "name": "有电击区"},
+    ]
 
 
 def build_goal_resources() -> List[dict]:
@@ -500,6 +511,7 @@ def build_actor_resources() -> List[dict]:
 def get_resource_groups() -> Dict[str, dict]:
     return {
         "terrain": {"title": "选择地形", "items": build_terrain_resources()},
+        "shock": {"title": "选择电击区", "items": build_shock_resources()},
         "goal": {"title": "选择目标位置", "items": build_goal_resources()},
         "actor": {"title": "选择角色", "items": build_actor_resources()},
     }
@@ -508,6 +520,7 @@ def get_resource_groups() -> Dict[str, dict]:
 def get_base_brush_by_group() -> Dict[str, int]:
     return {
         "terrain": TERRAIN_FLOOR,
+        "shock": 0,
         "goal": GOAL_EMPTY,
         "actor": ACTOR_EMPTY,
     }
@@ -606,15 +619,18 @@ def is_inside(level, x: int, y: int) -> bool:
 
 
 def level_has_wrapping_edges(level) -> bool:
-    """
-    只要整张地图中存在“雪地”或“冰面”，就启用首尾相连的联通边界。
-    由于关卡地形在求解过程中不会变化，这里做一个轻量缓存，避免 BFS 时重复扫描整张图。
-    """
+    """根据 boundary 判断是否启用首尾相连边界。"""
     cached = getattr(level, "_has_wrapping_edges_cache", None)
     if cached is not None:
         return bool(cached)
 
-    has_wrap = any(terrain_enables_wrapping(tid) for row in level.terrain for tid in row)
+    boundary = getattr(level, "boundary", None)
+    if boundary is None:
+        # 兼容旧关卡：没有 boundary 时，仍沿用“雪地/冰面触发开放边界”的旧规则。
+        has_wrap = any(terrain_enables_wrapping(tid) for row in level.terrain for tid in row)
+    else:
+        has_wrap = str(boundary).lower() == "open"
+
     setattr(level, "_has_wrapping_edges_cache", has_wrap)
     return has_wrap
 
@@ -644,7 +660,15 @@ def is_walkable_terrain(level, x: int, y: int) -> bool:
 
 
 def is_shock_terrain(level, x: int, y: int) -> bool:
-    return is_inside(level, x, y) and terrain_is_shock(level.terrain[y][x])
+    if not is_inside(level, x, y):
+        return False
+
+    shock_grid = getattr(level, "shock", None)
+    if shock_grid is not None and 0 <= y < len(shock_grid) and 0 <= x < len(shock_grid[y]):
+        return int(shock_grid[y][x]) != 0
+
+    # 兼容旧关卡：电击区仍可能直接写在 terrain 里。
+    return terrain_is_shock(level.terrain[y][x])
 
 
 def is_active_shock_terrain(level, used_shocks: Set[UsedShockItem], x: int, y: int) -> bool:
@@ -661,6 +685,10 @@ def can_place_actor(level, x: int, y: int) -> bool:
 
 def can_place_goal(level, x: int, y: int) -> bool:
     return is_inside(level, x, y) and can_place_goal_on_terrain_id(level.terrain[y][x])
+
+
+def can_place_shock(level, x: int, y: int) -> bool:
+    return is_inside(level, x, y) and level.terrain[y][x] in (TERRAIN_FLOOR, TERRAIN_SNOW)
 
 
 def level_from_actor_state(level, state: ActorState):
@@ -691,7 +719,8 @@ def is_victory_state(level, state: ActorState) -> bool:
     actor_items, _ = split_actor_state(state)
     actor_map = {(x, y): actor_id for x, y, actor_id, _ in actor_items}
 
-    if level.victory_mode == "any":
+    victory_mode = getattr(level, "victory_mode", DEFAULT_VICTORY_MODE)
+    if victory_mode == "any":
         for y in range(level.height):
             for x in range(level.width):
                 goal_id = level.goals[y][x]

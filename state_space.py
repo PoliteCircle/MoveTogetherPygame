@@ -62,6 +62,11 @@ def level_from_dict(data: dict) -> LevelData:
     level.terrain = [list(row) for row in data["terrain"]]
     level.actors = [list(row) for row in data["actors"]]
     level.goals = [list(row) for row in data["goals"]]
+    level.boundary = data.get("boundary", "closed")
+    shock_grid = data.get("shock")
+    if shock_grid is not None:
+        level.shock = [list(row) for row in shock_grid]
+
     actor_status = data.get("actor_status")
     if actor_status is not None:
         level.actor_status = [list(row) for row in actor_status]

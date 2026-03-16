@@ -17,7 +17,7 @@ from typing import Tuple
 
 import pygame
 
-from game_rules import ACTOR_EMPTY, GOAL_EMPTY, TERRAIN_SNOW, actor_def, goal_def, terrain_def
+from game_rules import ACTOR_EMPTY, GOAL_EMPTY, TERRAIN_SHOCK, actor_def, goal_def, terrain_def
 
 CELL_SIZE = 56
 EDITOR_PANEL_WIDTH = 430
@@ -335,7 +335,7 @@ def draw_level(
 ) -> None:
     actor_status = getattr(level, "actor_status", None)
     shock_used = getattr(level, "shock_used", None)
-    used_shock_as_snow = any(TERRAIN_SNOW in row for row in getattr(level, "terrain", []))
+    shock_grid = getattr(level, "shock", None)
 
     for y in range(level.height):
         for x in range(level.width):
@@ -345,17 +345,23 @@ def draw_level(
                 cell_size,
                 cell_size,
             )
+
+            draw_terrain(surface, rect, level.terrain[y][x])
+
+            cell_has_shock = False
+            if shock_grid is not None and 0 <= y < len(shock_grid) and 0 <= x < len(shock_grid[y]):
+                cell_has_shock = int(shock_grid[y][x]) != 0
+            elif level.terrain[y][x] == TERRAIN_SHOCK:
+                # 兼容旧关卡：电击区仍直接写在 terrain 中。
+                cell_has_shock = True
+
             cell_shock_used = False
             if shock_used is not None and 0 <= y < len(shock_used) and 0 <= x < len(shock_used[y]):
                 cell_shock_used = int(shock_used[y][x]) != 0
 
-            draw_terrain(
-                surface,
-                rect,
-                level.terrain[y][x],
-                shock_used=cell_shock_used,
-                used_shock_as_snow=used_shock_as_snow,
-            )
+            if cell_has_shock and not cell_shock_used:
+                draw_terrain(surface, rect, TERRAIN_SHOCK)
+
             draw_goal(surface, rect, level.goals[y][x])
 
             stunned_turns = 0

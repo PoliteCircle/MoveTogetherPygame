@@ -8,9 +8,10 @@ core.py
 2. BFS 求解与状态空间分析；
 3. 对外兼容的 move_level / is_victory 接口。
 
-注意：
-- 可扩展定义与规则在 game_rules.py
-- 绘图在 game_render.py
+说明：
+- JSON 关卡格式只保存静态信息：name / width / height / terrain / actors / goals / boundary / shock。
+- 角色麻痹状态与已消耗电击格属于运行时状态，不写回 JSON，而是放在求解状态中。
+- 为兼容旧版本关卡，load_level() 会尽力把旧格式转换为新格式。
 """
 
 import json
@@ -20,13 +21,16 @@ from typing import Dict, List, Optional, Tuple
 
 from game_rules import (
     ACTOR_EMPTY,
-    DEFAULT_VICTORY_MODE,
     ActorState,
     actor_state_from_level,
     is_victory_state,
     level_from_actor_state as rules_level_from_actor_state,
     move_actor_state,
 )
+
+BOUNDARY_CLOSED = "closed"
+BOUNDARY_OPEN = "open"
+VALID_BOUNDARIES = {BOUNDARY_CLOSED, BOUNDARY_OPEN}
 
 
 @dataclass
@@ -37,22 +41,37 @@ class LevelData:
     terrain: List[List[int]]
     actors: List[List[int]]
     goals: List[List[int]]
-    actor_status: List[List[int]]
-    shock_used: List[List[int]]
-    victory_mode: str = DEFAULT_VICTORY_MODE
+    boundary: str
+    shock: List[List[int]]
 
     def clone(self) -> "LevelData":
-        return LevelData(
+        cloned = LevelData(
             name=self.name,
             width=self.width,
             height=self.height,
             terrain=[row[:] for row in self.terrain],
             actors=[row[:] for row in self.actors],
             goals=[row[:] for row in self.goals],
-            actor_status=[row[:] for row in self.actor_status],
-            shock_used=[row[:] for row in self.shock_used],
-            victory_mode=self.victory_mode,
+            boundary=self.boundary,
+            shock=[row[:] for row in self.shock],
         )
+
+        # 运行时附加状态不写入 JSON，但在 clone 时保留，方便求解器 / 预览器复用。
+        actor_status = getattr(self, "actor_status", None)
+        if actor_status is not None:
+            cloned.actor_status = [row[:] for row in actor_status]
+
+        shock_used = getattr(self, "shock_used", None)
+        if shock_used is not None:
+            cloned.shock_used = [row[:] for row in shock_used]
+
+        if hasattr(self, "victory_mode"):
+            cloned.victory_mode = getattr(self, "victory_mode")
+
+        if hasattr(self, "_has_wrapping_edges_cache"):
+            cloned._has_wrapping_edges_cache = getattr(self, "_has_wrapping_edges_cache")
+
+        return cloned
 
 
 @dataclass
@@ -75,8 +94,7 @@ def create_empty_level(width: int, height: int, name: str = "新关卡") -> Leve
     terrain = [[TERRAIN_FLOOR for _ in range(width)] for _ in range(height)]
     actors = [[ACTOR_EMPTY for _ in range(width)] for _ in range(height)]
     goals = [[GOAL_EMPTY for _ in range(width)] for _ in range(height)]
-    actor_status = [[0 for _ in range(width)] for _ in range(height)]
-    shock_used = [[0 for _ in range(width)] for _ in range(height)]
+    shock = [[0 for _ in range(width)] for _ in range(height)]
     return LevelData(
         name=name,
         width=width,
@@ -84,8 +102,8 @@ def create_empty_level(width: int, height: int, name: str = "新关卡") -> Leve
         terrain=terrain,
         actors=actors,
         goals=goals,
-        actor_status=actor_status,
-        shock_used=shock_used,
+        boundary=BOUNDARY_CLOSED,
+        shock=shock,
     )
 
 
@@ -97,9 +115,8 @@ def level_to_dict(level: LevelData) -> dict:
         "terrain": level.terrain,
         "actors": level.actors,
         "goals": level.goals,
-        "actor_status": level.actor_status,
-        "shock_used": level.shock_used,
-        "victory_mode": level.victory_mode,
+        "boundary": level.boundary,
+        "shock": level.shock,
     }
 
 
@@ -115,8 +132,41 @@ def _validate_layer(data: dict, layer_name: str, width: int, height: int) -> Non
                 raise ValueError(f"{layer_name} 中必须全为整数")
 
 
+def _normalize_old_level_dict(data: dict) -> dict:
+    """
+    兼容旧关卡：
+    1. 旧版把电击区直接存进 terrain=3，这里迁移到 shock 数组；
+    2. 旧版没有 boundary 时，沿用旧规则：地图中存在雪地/冰面则视为开放边界，否则封闭；
+    3. 旧版 actor_status / shock_used / victory_mode 直接忽略，不再写回。
+    """
+    from game_rules import TERRAIN_FLOOR, TERRAIN_ICE, TERRAIN_SHOCK, TERRAIN_SNOW
+
+    if "shock" not in data:
+        width = int(data["width"])
+        height = int(data["height"])
+        shock = [[0 for _ in range(width)] for _ in range(height)]
+        terrain = [[int(v) for v in row] for row in data["terrain"]]
+        for y in range(height):
+            for x in range(width):
+                if terrain[y][x] == TERRAIN_SHOCK:
+                    shock[y][x] = 1
+                    terrain[y][x] = TERRAIN_FLOOR
+        data["terrain"] = terrain
+        data["shock"] = shock
+
+    if "boundary" not in data:
+        has_opening_terrain = any(
+            tid in (TERRAIN_SNOW, TERRAIN_ICE)
+            for row in data["terrain"]
+            for tid in row
+        )
+        data["boundary"] = BOUNDARY_OPEN if has_opening_terrain else BOUNDARY_CLOSED
+
+    return data
+
+
 def validate_level_dict(data: dict) -> None:
-    required = ["name", "width", "height", "terrain", "actors", "goals"]
+    required = ["name", "width", "height", "terrain", "actors", "goals", "boundary", "shock"]
     for key in required:
         if key not in data:
             raise ValueError(f"关卡文件缺少必要字段: {key}")
@@ -126,40 +176,30 @@ def validate_level_dict(data: dict) -> None:
     if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
         raise ValueError("width 和 height 必须是正整数")
 
-    for layer_name in ("terrain", "actors", "goals"):
+    for layer_name in ("terrain", "actors", "goals", "shock"):
         _validate_layer(data, layer_name, width, height)
 
-    if "actor_status" in data:
-        _validate_layer(data, "actor_status", width, height)
-    if "shock_used" in data:
-        _validate_layer(data, "shock_used", width, height)
+    boundary = data["boundary"]
+    if not isinstance(boundary, str) or boundary not in VALID_BOUNDARIES:
+        raise ValueError("boundary 必须是 'closed' 或 'open'")
 
 
 def load_level(path: str | Path) -> LevelData:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
+
+    data = _normalize_old_level_dict(data)
     validate_level_dict(data)
 
-    width = data["width"]
-    height = data["height"]
-    actor_status = data.get("actor_status")
-    if actor_status is None:
-        actor_status = [[0 for _ in range(width)] for _ in range(height)]
-
-    shock_used = data.get("shock_used")
-    if shock_used is None:
-        shock_used = [[0 for _ in range(width)] for _ in range(height)]
-
     return LevelData(
-        name=data["name"],
-        width=width,
-        height=height,
-        terrain=data["terrain"],
-        actors=data["actors"],
-        goals=data["goals"],
-        actor_status=actor_status,
-        shock_used=shock_used,
-        victory_mode=data.get("victory_mode", DEFAULT_VICTORY_MODE),
+        name=str(data["name"]),
+        width=int(data["width"]),
+        height=int(data["height"]),
+        terrain=[[int(v) for v in row] for row in data["terrain"]],
+        actors=[[int(v) for v in row] for row in data["actors"]],
+        goals=[[int(v) for v in row] for row in data["goals"]],
+        boundary=str(data["boundary"]),
+        shock=[[int(v) for v in row] for row in data["shock"]],
     )
 
 
@@ -242,7 +282,6 @@ def analyze_level_state_graph(
                 if len(states) >= max_states:
                     truncated = True
                     continue
-
                 dst_index = len(states)
                 state_to_index[new_state] = dst_index
                 states.append(new_state)
@@ -253,13 +292,9 @@ def analyze_level_state_graph(
 
                 if solution_index is None and is_victory_state(level, new_state):
                     solution_index = dst_index
-
             edges.append((src_index, dst_index, move_name))
 
-    solution_moves = None
-    if solution_index is not None:
-        solution_moves = _reconstruct_solution_from_indices(parents, parent_moves, solution_index)
-
+    solution_moves = None if solution_index is None else _reconstruct_solution_from_indices(parents, parent_moves, solution_index)
     return StateGraphResult(
         states=states,
         depths=depths,
@@ -279,4 +314,5 @@ def solve_level_bfs(
     max_states: int = 200000,
     max_depth: Optional[int] = None,
 ) -> Optional[List[str]]:
-    return analyze_level_state_graph(level, max_states=max_states, max_depth=max_depth).solution_moves
+    graph = analyze_level_state_graph(level, max_states=max_states, max_depth=max_depth)
+    return graph.solution_moves
